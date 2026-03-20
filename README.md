@@ -112,8 +112,9 @@ Baseline, without the local patch:
 Notes:
 
 - default server URL is `ws://127.0.0.1:8000/v1/realtime`
-- the serve scripts are tuned for a 4090-class GPU
+- the serve scripts now default to a lower-memory realtime profile: `GPU_MEMORY_UTILIZATION=0.55` and `MAX_MODEL_LEN=4096`
 - adjust `GPU_MEMORY_UTILIZATION`, `MAX_MODEL_LEN`, `VLLM_HOST`, or `VLLM_PORT` via env vars if needed
+- `./scripts/run_live_external_models.sh` now auto-starts `./scripts/serve_voxtral_optimized.sh` when Voxtral is selected and no local server is already listening
 
 ### Sherpa
 

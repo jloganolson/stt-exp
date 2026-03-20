@@ -27,6 +27,12 @@ stt-exp = "stt_exp.cli:main"
 dev = [
     "pytest>=8.3.0",
 ]
+voxtral-eou = [
+    "silero-vad>=6.2.1",
+]
+voxtral-smart-turn = [
+    "pipecat-ai[local-smart-turn]>=0.0.106",
+]
 voxtral = [
     "soxr>=0.5.0",
     "soundfile>=0.13.0",

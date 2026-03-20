@@ -21,6 +21,7 @@ from stt_exp.providers.parakeet_external import ParakeetExternalConfig, Parakeet
 from stt_exp.providers.sherpa_realtime import SherpaRealtimeConfig, SherpaRealtimeProvider
 from stt_exp.providers.voxtral_realtime import VoxtralRealtimeConfig, VoxtralRealtimeProvider
 from stt_exp.voxtral_model import DEFAULT_VOXTRAL_REPO, prepare_voxtral_model
+from stt_exp.voxtral_eou import VOXTRAL_EOU_MODES, VoxtralEouConfig
 
 load_dotenv()
 
@@ -102,6 +103,12 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--voxtral-open-timeout-s", type=float, default=10.0)
     bench.add_argument("--voxtral-receive-timeout-s", type=float, default=30.0)
     bench.add_argument("--voxtral-warmup-silence-ms", type=int, default=1000)
+    bench.add_argument("--voxtral-eou-mode", choices=VOXTRAL_EOU_MODES, default="none")
+    bench.add_argument("--voxtral-eou-min-utterance-ms", type=int, default=300)
+    bench.add_argument("--voxtral-eou-silero-threshold", type=float, default=0.5)
+    bench.add_argument("--voxtral-eou-silero-min-silence-ms", type=int, default=500)
+    bench.add_argument("--voxtral-eou-smart-turn-model-path", type=str, default=None)
+    bench.add_argument("--voxtral-eou-smart-turn-cpu-count", type=int, default=1)
     bench.set_defaults(func=run_benchmark_command)
 
     prepare = subparsers.add_parser("prepare-voxtral-model", help="Download and patch a local Voxtral model copy.")
@@ -158,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="auto")
     live.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     live.add_argument("--voxtral-model", type=str, default=DEFAULT_VOXTRAL_REPO)
+    live.add_argument("--voxtral-eou-mode", choices=VOXTRAL_EOU_MODES, default="none")
+    live.add_argument("--voxtral-eou-min-utterance-ms", type=int, default=300)
+    live.add_argument("--voxtral-eou-silero-threshold", type=float, default=0.5)
+    live.add_argument("--voxtral-eou-silero-min-silence-ms", type=int, default=500)
+    live.add_argument("--voxtral-eou-smart-turn-model-path", type=str, default=None)
+    live.add_argument("--voxtral-eou-smart-turn-cpu-count", type=int, default=1)
     live.set_defaults(func=run_live_command)
 
     devices = subparsers.add_parser("devices", help="List available input audio devices.")
@@ -263,6 +276,12 @@ def run_live_command(args: argparse.Namespace) -> None:
             parakeet_device=args.parakeet_device,
             voxtral_uri=args.voxtral_uri,
             voxtral_model=args.voxtral_model,
+            voxtral_eou_mode=args.voxtral_eou_mode,
+            voxtral_eou_min_utterance_ms=args.voxtral_eou_min_utterance_ms,
+            voxtral_eou_silero_threshold=args.voxtral_eou_silero_threshold,
+            voxtral_eou_silero_min_silence_ms=args.voxtral_eou_silero_min_silence_ms,
+            voxtral_eou_smart_turn_model_path=args.voxtral_eou_smart_turn_model_path,
+            voxtral_eou_smart_turn_cpu_count=args.voxtral_eou_smart_turn_cpu_count,
         )
     )
 
@@ -320,6 +339,15 @@ def _build_providers(args: argparse.Namespace):
                         receive_timeout_s=args.voxtral_receive_timeout_s,
                         open_timeout_s=args.voxtral_open_timeout_s,
                         warmup_silence_ms=args.voxtral_warmup_silence_ms,
+                        eou=VoxtralEouConfig(
+                            mode=args.voxtral_eou_mode,
+                            preset_name="cli",
+                            min_utterance_ms=args.voxtral_eou_min_utterance_ms,
+                            silero_threshold=args.voxtral_eou_silero_threshold,
+                            silero_min_silence_ms=args.voxtral_eou_silero_min_silence_ms,
+                            smart_turn_model_path=args.voxtral_eou_smart_turn_model_path,
+                            smart_turn_cpu_count=args.voxtral_eou_smart_turn_cpu_count,
+                        ),
                     )
                 )
             )

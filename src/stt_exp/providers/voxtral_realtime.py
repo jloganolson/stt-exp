@@ -10,6 +10,7 @@ import websockets
 
 from stt_exp.audio import AudioClip, iter_pcm16_chunks, silence_pcm16
 from stt_exp.providers.base import ProviderResult, ProviderTraceEvent, RealtimeProvider
+from stt_exp.voxtral_eou import VoxtralEouConfig, VoxtralEouDetectorFactory, summarize_voxtral_eou_config
 
 
 @dataclass(slots=True)
@@ -21,6 +22,7 @@ class VoxtralRealtimeConfig:
     receive_timeout_s: float
     open_timeout_s: float
     warmup_silence_ms: int
+    eou: VoxtralEouConfig | None = None
 
 
 class VoxtralRealtimeProvider(RealtimeProvider):
@@ -28,6 +30,7 @@ class VoxtralRealtimeProvider(RealtimeProvider):
 
     def __init__(self, config: VoxtralRealtimeConfig):
         self.config = config
+        self._detector_factory = VoxtralEouDetectorFactory()
 
     def warmup(self) -> None:
         if self.config.warmup_silence_ms <= 0:
@@ -40,6 +43,7 @@ class VoxtralRealtimeProvider(RealtimeProvider):
         return asyncio.run(self._run_session(chunks, label=label))
 
     async def _run_session(self, chunks: list[bytes], label: str) -> ProviderResult:
+        detector_config = self.config.eou or VoxtralEouConfig()
         result = ProviderResult(
             provider=self.name,
             transcript_text="",
@@ -49,11 +53,13 @@ class VoxtralRealtimeProvider(RealtimeProvider):
                 "model": self.config.model,
                 "chunk_ms": self.config.chunk_ms,
                 "pace": self.config.pace,
+                "eou": summarize_voxtral_eou_config(detector_config),
             },
         )
         transcript_parts: list[str] = []
 
         try:
+            detector = self._detector_factory.build(detector_config)
             async with websockets.connect(
                 self.config.uri,
                 open_timeout=self.config.open_timeout_s,
@@ -66,15 +72,43 @@ class VoxtralRealtimeProvider(RealtimeProvider):
 
                 await ws.send(json.dumps({"type": "session.update", "model": self.config.model}))
                 await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                done_count = 0
 
-                for chunk in chunks:
+                async def recv_until_done() -> None:
+                    nonlocal done_count
+                    while True:
+                        raw_message = await asyncio.wait_for(ws.recv(), timeout=self.config.receive_timeout_s)
+                        message = json.loads(raw_message)
+                        now = time.perf_counter()
+
+                        if message.get("type") == "transcription.delta":
+                            delta = message.get("delta", "")
+                            if delta:
+                                if result.first_text_at is None:
+                                    result.first_text_at = now
+                                transcript_parts.append(delta)
+                                result.events.append(
+                                    ProviderTraceEvent(ts_s=now, type="transcription.delta", text=delta)
+                                )
+                        elif message.get("type") == "transcription.done":
+                            done_count += 1
+                            result.final_at = now
+                            result.transcript_text = message.get("text", "").strip() or "".join(transcript_parts).strip()
+                            result.meta["usage"] = message.get("usage")
+                            result.events.append(
+                                ProviderTraceEvent(ts_s=now, type="transcription.done", text=result.transcript_text)
+                            )
+                            detector.reset()
+                            break
+                        elif message.get("type") == "error":
+                            raise RuntimeError(message.get("error", "Unknown Voxtral error"))
+
+                async def append_audio(chunk: bytes) -> None:
                     now = time.perf_counter()
                     if result.first_audio_sent_at is None:
                         result.first_audio_sent_at = now
                     result.last_audio_sent_at = now
-                    result.events.append(
-                        ProviderTraceEvent(ts_s=now, type="audio.append", meta={"bytes": len(chunk)})
-                    )
+                    result.events.append(ProviderTraceEvent(ts_s=now, type="audio.append", meta={"bytes": len(chunk)}))
                     await ws.send(
                         json.dumps(
                             {
@@ -83,35 +117,43 @@ class VoxtralRealtimeProvider(RealtimeProvider):
                             }
                         )
                     )
-                    if self.config.pace == "realtime":
-                        await asyncio.sleep(self.config.chunk_ms / 1000.0)
 
-                await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
-
-                while True:
-                    raw_message = await asyncio.wait_for(ws.recv(), timeout=self.config.receive_timeout_s)
-                    message = json.loads(raw_message)
-                    now = time.perf_counter()
-
-                    if message.get("type") == "transcription.delta":
-                        delta = message.get("delta", "")
-                        if delta:
-                            if result.first_text_at is None:
-                                result.first_text_at = now
-                            transcript_parts.append(delta)
+                if detector.enabled:
+                    for chunk in chunks:
+                        await append_audio(chunk)
+                        if await detector.on_audio_chunk(chunk):
                             result.events.append(
-                                ProviderTraceEvent(ts_s=now, type="transcription.delta", text=delta)
+                                ProviderTraceEvent(
+                                    ts_s=time.perf_counter(),
+                                    type="eou.finalize",
+                                    meta={"mode": detector.config.mode},
+                                )
                             )
-                    elif message.get("type") == "transcription.done":
-                        result.final_at = now
-                        result.transcript_text = message.get("text", "").strip() or "".join(transcript_parts).strip()
-                        result.meta["usage"] = message.get("usage")
-                        result.events.append(
-                            ProviderTraceEvent(ts_s=now, type="transcription.done", text=result.transcript_text)
+                            await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
+                            await recv_until_done()
+                            await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                        if self.config.pace == "realtime":
+                            await asyncio.sleep(self.config.chunk_ms / 1000.0)
+
+                    await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
+                    result.events.append(
+                        ProviderTraceEvent(
+                            ts_s=time.perf_counter(),
+                            type="eou.finalize",
+                            meta={"mode": detector.config.mode, "reason": "end_of_audio"},
                         )
-                        break
-                    elif message.get("type") == "error":
-                        raise RuntimeError(message.get("error", "Unknown Voxtral error"))
+                    )
+                    await recv_until_done()
+                else:
+                    for chunk in chunks:
+                        await append_audio(chunk)
+                        if self.config.pace == "realtime":
+                            await asyncio.sleep(self.config.chunk_ms / 1000.0)
+
+                    await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
+                    await recv_until_done()
+
+                result.meta["done_count"] = done_count
         except Exception as exc:
             result.error = str(exc)
             if not result.transcript_text:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections import deque
 import json
 import os
 import queue
@@ -16,6 +17,17 @@ from contextlib import contextmanager
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from stt_exp.voxtral_eou import (
+    VOXTRAL_EOU_CONTROL_CYCLE_MODE,
+    VOXTRAL_EOU_CONTROL_CYCLE_PRESET,
+    VoxtralEouConfig,
+    VoxtralEouDetectorFactory,
+    apply_voxtral_eou_preset,
+    cycle_voxtral_eou_mode_with_available,
+    cycle_voxtral_eou_preset_name,
+    get_available_voxtral_eou_modes,
+    summarize_voxtral_eou_config,
+)
 
 load_dotenv()
 
@@ -42,6 +54,12 @@ class LiveConfig:
     parakeet_device: str
     voxtral_uri: str
     voxtral_model: str
+    voxtral_eou_mode: str
+    voxtral_eou_min_utterance_ms: int
+    voxtral_eou_silero_threshold: float
+    voxtral_eou_silero_min_silence_ms: int
+    voxtral_eou_smart_turn_model_path: str | None
+    voxtral_eou_smart_turn_cpu_count: int
 
 
 @dataclass(slots=True)
@@ -58,13 +76,21 @@ class LiveDisplay:
         self.lock = threading.Lock()
         self.dynamic = sys.stdout.isatty()
         self._rendered = False
+        self.system_status = ""
 
     def init(self) -> None:
         with self.lock:
             if self.dynamic:
+                if self.system_status:
+                    print(self._format_system_line(), flush=True)
                 for provider in self.providers:
                     print(self._format_line(provider), flush=True)
                 self._rendered = True
+
+    def set_system_status(self, text: str) -> None:
+        with self.lock:
+            self.system_status = text
+            self._render_locked("system", text, "system")
 
     def emit(self, provider: str, text: str, kind: str = "status") -> None:
         with self.lock:
@@ -112,20 +138,33 @@ class LiveDisplay:
             line += f" | {text}"
         return line
 
+    def _format_system_line(self) -> str:
+        text = self.system_status.strip() or "ready"
+        return f"{'system':8s} | {text}"
+
     def _render_locked(self, provider: str, text: str, kind: str) -> None:
         if not self.dynamic:
-            if kind == "status":
+            if kind == "system":
+                print(f"[system] {text}", flush=True)
+            elif kind == "status":
                 print(f"[{provider}] {text}", flush=True)
             elif kind == "final":
                 print(f"[{provider}] FINAL {text}", flush=True)
             elif kind == "clear":
-                print("[system] Cleared current text.", flush=True)
+                if provider:
+                    print(f"[{provider}] {text}", flush=True)
+                else:
+                    print("[system] Cleared current text.", flush=True)
             else:
                 print(f"[{provider}] {text}", flush=True)
             return
 
         if self._rendered:
-            sys.stdout.write(f"\x1b[{len(self.providers)}F")
+            lines_to_rewind = len(self.providers) + (1 if self.system_status else 0)
+            sys.stdout.write(f"\x1b[{lines_to_rewind}F")
+        if self.system_status:
+            sys.stdout.write("\x1b[2K")
+            sys.stdout.write(self._format_system_line() + "\n")
         for name in self.providers:
             sys.stdout.write("\x1b[2K")
             sys.stdout.write(self._format_line(name) + "\n")
@@ -189,6 +228,18 @@ def _append_voxtral_delta(current_text: str, delta: str) -> str:
     return current_text + delta
 
 
+def _build_voxtral_live_eou_config(config: LiveConfig) -> VoxtralEouConfig:
+    return VoxtralEouConfig(
+        mode=config.voxtral_eou_mode,
+        preset_name="balanced",
+        min_utterance_ms=config.voxtral_eou_min_utterance_ms,
+        silero_threshold=config.voxtral_eou_silero_threshold,
+        silero_min_silence_ms=config.voxtral_eou_silero_min_silence_ms,
+        smart_turn_model_path=config.voxtral_eou_smart_turn_model_path,
+        smart_turn_cpu_count=config.voxtral_eou_smart_turn_cpu_count,
+    )
+
+
 def run_live(config: LiveConfig) -> None:
     import sounddevice as sd
 
@@ -226,7 +277,7 @@ def run_live(config: LiveConfig) -> None:
         threads.append(
             threading.Thread(
                 target=_run_voxtral_live,
-                args=(config, queues["voxtral"], control_queues["voxtral"], stop_event, display.emit),
+                args=(config, queues["voxtral"], control_queues["voxtral"], stop_event, display.emit, display.set_system_status),
                 daemon=True,
             )
         )
@@ -258,6 +309,11 @@ def run_live(config: LiveConfig) -> None:
     print(f"[system] Listening on device={config.device if config.device is not None else 'default'}", flush=True)
     print(f"[system] Providers: {', '.join(config.providers)}", flush=True)
     print("[system] Press Ctrl+C to stop. Press r to clear/reset current utterance.", flush=True)
+    if "voxtral" in config.providers:
+        print("[system] Voxtral hotkeys: v cycles EOU type, g cycles EOU aggressiveness preset.", flush=True)
+        display.set_system_status(
+            f"Voxtral EOU: {summarize_voxtral_eou_config(_build_voxtral_live_eou_config(config))}"
+        )
     display.init()
 
     for thread in threads:
@@ -291,6 +347,18 @@ def run_live(config: LiveConfig) -> None:
                                     control_queue.put_nowait("reset")
                                 except queue.Full:
                                     pass
+                            continue
+                        if "voxtral" in config.providers and key.lower() == "v":
+                            try:
+                                control_queues["voxtral"].put_nowait(VOXTRAL_EOU_CONTROL_CYCLE_MODE)
+                            except queue.Full:
+                                pass
+                            continue
+                        if "voxtral" in config.providers and key.lower() == "g":
+                            try:
+                                control_queues["voxtral"].put_nowait(VOXTRAL_EOU_CONTROL_CYCLE_PRESET)
+                            except queue.Full:
+                                pass
                             continue
                 else:
                     time.sleep(0.1)
@@ -415,20 +483,46 @@ def _run_voxtral_live(
     control_queue: queue.Queue[str],
     stop_event: threading.Event,
     emit,
+    set_system_status,
 ) -> None:
-    asyncio.run(_run_voxtral_live_async(config, audio_queue, control_queue, stop_event, emit))
+    detector_config = _build_voxtral_live_eou_config(config)
+    factory = VoxtralEouDetectorFactory()
+    available_modes = get_available_voxtral_eou_modes()
+    try:
+        detector = factory.build(detector_config)
+    except Exception as exc:
+        emit("voxtral", f"error: {exc}", kind="status")
+        return
+    asyncio.run(
+        _run_voxtral_live_async(
+            config,
+            detector,
+            factory,
+            available_modes,
+            audio_queue,
+            control_queue,
+            stop_event,
+            emit,
+            set_system_status,
+        )
+    )
 
 
 async def _run_voxtral_live_async(
     config: LiveConfig,
+    detector,
+    detector_factory,
+    available_modes: tuple[str, ...],
     audio_queue: queue.Queue[bytes],
     control_queue: queue.Queue[str],
     stop_event: threading.Event,
     emit,
+    set_system_status,
 ) -> None:
     import websockets
 
     last_connect_error: str | None = None
+    active_detector_config = detector.config
 
     while not stop_event.is_set():
         try:
@@ -440,14 +534,35 @@ async def _run_voxtral_live_async(
                     stop_event.set()
                     return
 
-                emit("voxtral", "connected", kind="status")
+                emit("voxtral", f"connected eou={summarize_voxtral_eou_config(active_detector_config)}", kind="status")
+                set_system_status(f"Voxtral EOU: {summarize_voxtral_eou_config(active_detector_config)}")
                 await ws.send(json.dumps({"type": "session.update", "model": config.voxtral_model}))
                 await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
                 current_text = ""
                 reset_requested = False
+                waiting_for_done = False
+                buffered_chunks: deque[bytes] = deque(maxlen=256)
+
+                def rebuild_detector(next_config: VoxtralEouConfig) -> bool:
+                    nonlocal detector, active_detector_config, waiting_for_done, current_text
+                    try:
+                        emit("voxtral", f"loading eou={next_config.mode}", kind="status")
+                        next_detector = detector_factory.build(next_config)
+                    except Exception as exc:
+                        emit("voxtral", f"error: {exc}", kind="status")
+                        return False
+                    detector = next_detector
+                    active_detector_config = next_config
+                    waiting_for_done = False
+                    current_text = ""
+                    buffered_chunks.clear()
+                    emit("voxtral", "", kind="clear")
+                    emit("voxtral", f"eou -> {summarize_voxtral_eou_config(active_detector_config)}", kind="status")
+                    set_system_status(f"Voxtral EOU: {summarize_voxtral_eou_config(active_detector_config)}")
+                    return True
 
                 async def send_audio() -> None:
-                    nonlocal reset_requested
+                    nonlocal reset_requested, waiting_for_done
                     while not stop_event.is_set():
                         try:
                             action = control_queue.get_nowait()
@@ -455,12 +570,49 @@ async def _run_voxtral_live_async(
                             action = None
                         if action == "reset":
                             reset_requested = True
+                            detector.reset()
                             await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
                             return
-                        try:
-                            chunk = await asyncio.to_thread(audio_queue.get, True, 0.1)
-                        except queue.Empty:
+                        if action == VOXTRAL_EOU_CONTROL_CYCLE_MODE:
+                            next_config = VoxtralEouConfig(
+                                mode=cycle_voxtral_eou_mode_with_available(active_detector_config.mode, available_modes),
+                                preset_name=active_detector_config.preset_name,
+                                min_utterance_ms=active_detector_config.min_utterance_ms,
+                                silero_threshold=active_detector_config.silero_threshold,
+                                silero_min_silence_ms=active_detector_config.silero_min_silence_ms,
+                                smart_turn_model_path=active_detector_config.smart_turn_model_path,
+                                smart_turn_cpu_count=active_detector_config.smart_turn_cpu_count,
+                            )
+                            changed = rebuild_detector(next_config)
+                            detector.reset()
+                            if changed and not waiting_for_done:
+                                waiting_for_done = True
+                                await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
                             continue
+                        if action == VOXTRAL_EOU_CONTROL_CYCLE_PRESET:
+                            next_config = apply_voxtral_eou_preset(
+                                active_detector_config,
+                                cycle_voxtral_eou_preset_name(active_detector_config.preset_name),
+                            )
+                            changed = rebuild_detector(next_config)
+                            detector.reset()
+                            if changed and not waiting_for_done:
+                                waiting_for_done = True
+                                await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
+                            continue
+
+                        if buffered_chunks and not waiting_for_done:
+                            chunk = buffered_chunks.popleft()
+                        else:
+                            try:
+                                chunk = await asyncio.to_thread(audio_queue.get, True, 0.1)
+                            except queue.Empty:
+                                continue
+
+                        if waiting_for_done:
+                            buffered_chunks.append(chunk)
+                            continue
+
                         await ws.send(
                             json.dumps(
                                 {
@@ -469,9 +621,13 @@ async def _run_voxtral_live_async(
                                 }
                             )
                         )
+                        if await detector.on_audio_chunk(chunk):
+                            waiting_for_done = True
+                            emit("voxtral", "eou finalizing", kind="status")
+                            await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
 
                 async def recv_text() -> None:
-                    nonlocal current_text
+                    nonlocal current_text, waiting_for_done
                     async for raw_message in ws:
                         message = json.loads(raw_message)
                         if message.get("type") == "transcription.delta":
@@ -484,6 +640,10 @@ async def _run_voxtral_live_async(
                             if text and not reset_requested:
                                 emit("voxtral", text, kind="final")
                             current_text = ""
+                            detector.reset()
+                            if waiting_for_done and not reset_requested:
+                                waiting_for_done = False
+                                await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
                             if reset_requested:
                                 return
                         elif message.get("type") == "error":
