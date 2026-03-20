@@ -155,6 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default="nvidia/parakeet_realtime_eou_120m-v1",
     )
+    live.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="auto")
     live.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     live.add_argument("--voxtral-model", type=str, default=DEFAULT_VOXTRAL_REPO)
     live.set_defaults(func=run_live_command)
@@ -259,6 +260,7 @@ def run_live_command(args: argparse.Namespace) -> None:
             parakeet_python=args.parakeet_python,
             parakeet_worker_script=args.parakeet_worker_script,
             parakeet_model_id=args.parakeet_model_id,
+            parakeet_device=args.parakeet_device,
             voxtral_uri=args.voxtral_uri,
             voxtral_model=args.voxtral_model,
         )
