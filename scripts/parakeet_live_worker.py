@@ -29,9 +29,16 @@ def emit(message: dict[str, object]) -> None:
 
 
 class ParakeetLiveStreamer:
-    def __init__(self, model_id: str):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = nemo_asr.models.ASRModel.from_pretrained(model_id)
+    def __init__(self, model_id: str, device_name: str):
+        if device_name == "auto":
+            resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            resolved_device = device_name
+        if resolved_device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("cuda requested but CUDA is not available")
+        self.device = torch.device(resolved_device)
+        map_location = "cpu" if self.device.type == "cpu" else None
+        self.model = nemo_asr.models.ASRModel.from_pretrained(model_id, map_location=map_location)
         self.model = self.model.to(self.device)
         self.model.eval()
 
@@ -168,14 +175,18 @@ class ParakeetLiveStreamer:
             emit({"type": "final", "text": final_text})
         self._reset_stream_state()
 
+    def reset(self) -> None:
+        self._reset_stream_state()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="nvidia/parakeet_realtime_eou_120m-v1")
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     args = parser.parse_args()
 
     try:
-        streamer = ParakeetLiveStreamer(args.model_id)
+        streamer = ParakeetLiveStreamer(args.model_id, args.device)
     except Exception as exc:
         emit({"type": "error", "message": f"failed to initialize model: {exc}"})
         raise
@@ -204,6 +215,9 @@ def main() -> None:
                 emit({"type": "error", "message": f"invalid audio payload: {exc}"})
                 break
             streamer.feed_audio(pcm)
+        elif msg_type == "reset":
+            streamer.reset()
+            emit({"type": "status", "message": "manual reset"})
         elif msg_type == "stop":
             streamer.flush()
             break
