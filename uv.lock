@@ -1223,26 +1223,6 @@ wheels = [
 ]
 
 [[package]]
-name = "moonshine-voice"
-version = "0.0.51"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "filelock" },
-    { name = "numpy" },
-    { name = "platformdirs" },
-    { name = "requests" },
-    { name = "sounddevice" },
-    { name = "tqdm" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/89/7d7cbdd9ffafd23935c82e73a01d277b2411daccb512f93406ffd5577c7b/moonshine_voice-0.0.51-py3-none-macosx_15_0_arm64.whl", hash = "sha256:5db558ea4f90c328f4cb1794133c6afe73942bf22235a856eb5f80d2c9064cb5", size = 76828882, upload-time = "2026-03-16T20:36:47.031Z" },
-    { url = "https://files.pythonhosted.org/packages/2b/e2/50ded5b57dac6ae4cffee181162516c4a0cee1eb3d5684a4b493d7571e2e/moonshine_voice-0.0.51-py3-none-manylinux_2_31_aarch64.manylinux_2_34_aarch64.whl", hash = "sha256:99741385edabb6f89f2334bb82d9e4352a55485fc6d1bcedcb278432e8d50911", size = 57727858, upload-time = "2026-03-16T22:55:58.585Z" },
-    { url = "https://files.pythonhosted.org/packages/9a/5e/d3e2d59dc38626154d1c711d83f7164e296d8ef39bca02d840e6c8101347/moonshine_voice-0.0.51-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:4f36f6eb111f795fc19a41799bd38c0d9a15ce0a648e1bf835bcce930cb6e37e", size = 83965700, upload-time = "2026-03-16T21:09:39.241Z" },
-    { url = "https://files.pythonhosted.org/packages/a8/f0/1e198a7ed7a5dc8c7024cb2e394eddc71c23e01197d8e19dfade196a383d/moonshine_voice-0.0.51-py3-none-manylinux_2_34_x86_64.whl", hash = "sha256:0da71c6e3021a412924dab67283634d9c1d13903ded42d10ca83c44881bd3e0b", size = 85048714, upload-time = "2026-03-16T21:08:04.42Z" },
-    { url = "https://files.pythonhosted.org/packages/df/37/3a86870a795dd108519c73298b0974d91d416ef341e08089a7d160d1ca7d/moonshine_voice-0.0.51-py3-none-win_amd64.whl", hash = "sha256:9f13f3aea8406a89d486b61980a8de993b4db77403fa3c4ace7c55582fab9704", size = 55564935, upload-time = "2026-03-16T23:12:41.386Z" },
-]
-
-[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2694,7 +2674,6 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "jiwer" },
     { name = "librosa" },
-    { name = "moonshine-voice" },
     { name = "numpy" },
     { name = "python-dotenv" },
     { name = "sherpa-onnx" },
@@ -2724,7 +2703,6 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.31.0" },
     { name = "jiwer", specifier = ">=3.1.0" },
     { name = "librosa", specifier = ">=0.11.0" },
-    { name = "moonshine-voice", specifier = ">=0.0.51" },
     { name = "numpy", specifier = ">=2.2.0" },
     { name = "pipecat-ai", extras = ["local-smart-turn"], marker = "extra == 'voxtral-smart-turn'", specifier = ">=0.0.106" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },

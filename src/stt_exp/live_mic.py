@@ -46,8 +46,6 @@ class LiveConfig:
     sherpa_model_dir: str
     sherpa_provider: str
     sherpa_num_threads: int
-    moonshine_language: str
-    moonshine_model_arch: int | None
     parakeet_python: str
     parakeet_worker_script: str
     parakeet_model_id: str
@@ -286,14 +284,6 @@ def run_live(config: LiveConfig) -> None:
             threading.Thread(
                 target=_run_sherpa_live,
                 args=(config, queues["sherpa"], control_queues["sherpa"], stop_event, display.emit),
-                daemon=True,
-            )
-        )
-    if "moonshine" in config.providers:
-        threads.append(
-            threading.Thread(
-                target=_run_moonshine_live,
-                args=(config, queues["moonshine"], control_queues["moonshine"], stop_event, display.emit),
                 daemon=True,
             )
         )
@@ -739,63 +729,6 @@ def _run_sherpa_live(
             emit("sherpa", text, kind="final")
             recognizer.reset(stream)
             last_text = ""
-
-
-def _run_moonshine_live(
-    config: LiveConfig,
-    audio_queue: queue.Queue[bytes],
-    control_queue: queue.Queue[str],
-    stop_event: threading.Event,
-    emit,
-) -> None:
-    import numpy as np
-    from moonshine_voice import ModelArch, TranscriptEventListener, Transcriber, get_model_for_language
-
-    wanted_arch = None if config.moonshine_model_arch is None else ModelArch(config.moonshine_model_arch)
-    model_path, model_arch = get_model_for_language(
-        wanted_language=config.moonshine_language,
-        wanted_model_arch=wanted_arch,
-    )
-
-    class Listener(TranscriptEventListener):
-        def on_line_text_changed(self, event) -> None:
-            text = event.line.text.strip()
-            if text:
-                emit("moonshine", text, kind="replace")
-
-        def on_line_completed(self, event) -> None:
-            text = event.line.text.strip()
-            if text:
-                emit("moonshine", text, kind="final")
-
-    with Transcriber(model_path=model_path, model_arch=model_arch, update_interval=config.chunk_ms / 1000.0) as transcriber:
-        stream = transcriber.create_stream(update_interval=config.chunk_ms / 1000.0)
-        stream.add_listener(Listener())
-        stream.start()
-        emit("moonshine", "connected", kind="status")
-        while not stop_event.is_set():
-            try:
-                action = control_queue.get_nowait()
-            except queue.Empty:
-                action = None
-            if action == "reset":
-                stream.stop()
-                stream.close()
-                stream = transcriber.create_stream(update_interval=config.chunk_ms / 1000.0)
-                stream.add_listener(Listener())
-                stream.start()
-                emit("moonshine", "manual reset", kind="status")
-                continue
-            try:
-                chunk = audio_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-            stream.add_audio(samples.tolist(), SAMPLE_RATE)
-        stream.stop()
-        stream.close()
-
-
 def _run_parakeet_live(
     config: LiveConfig,
     audio_queue: queue.Queue[bytes],

@@ -1,94 +1,75 @@
 # stt-exp
 
-Realtime STT benchmark and live-CLI harness for:
+Realtime speech-to-text harness for running the same microphone audio through:
 
 - `deepgram`
 - `voxtral`
 - `sherpa`
 - `parakeet`
-- `moonshine` (optional, not part of the current main comparison)
 
-The repo is built around one idea: feed the same audio to each engine with the
-same pacing, then compare latency and transcript output.
+The main supported entrypoint is:
 
-## What This Repo Covers
+```bash
+./scripts/run_live_external_models.sh
+```
 
-- File-based realtime benchmarks with shared metrics
-- Live microphone CLI that fans the same mic audio out to multiple providers in parallel
-- Voxtral tuning based on Mistral's public discussion:
-  - warmup before measurement
-  - `streaming_n_left_pad_tokens=0`
-- Repo-local scripts for serving Voxtral and downloading the Sherpa model
+It starts the live CLI, fans the mic audio out to all configured providers, and
+auto-starts the local optimized Voxtral server when needed.
 
-## Current Comparison Summary
+## What This Repo Is For
 
-Main file benchmark without Moonshine:
+- running the four-provider live comparison quickly
+- tuning Voxtral realtime behavior, especially EOU behavior
+- running deterministic WAV-based checks when live behavior is unclear
 
-- Deepgram: `ttft 1081.3ms`, `final 2506.8ms`, `tail 115.7ms`
-- Parakeet: `ttft 607.7ms`, `final 2664.0ms`, `tail 332.4ms`
-- Sherpa: `ttft 1307.3ms`, `final 2633.0ms`, `tail 116.2ms`
-- Voxtral: `ttft 2460.7ms`, `final 2649.3ms`, `tail 229.3ms`
-
-Source: [results/compare-no-moonshine-s2.json](/home/logan/Projects/stt-exp/results/compare-no-moonshine-s2.json)
-
-Important caveat: the quick test manifest derives references from filenames, so
-WER is not trustworthy unless you replace those references with real transcripts.
+If you only care about live testing, you can treat everything else in the repo
+as support code for `run_live_external_models.sh`.
 
 ## Requirements
 
 - Linux
 - `uv`
-- NVIDIA GPU recommended
-- CUDA-capable environment for `voxtral`, `sherpa`, and `parakeet`
-- Deepgram API key if you want to run Deepgram
+- Python `3.12`
+- NVIDIA GPU for local `voxtral`, `sherpa`, and usually `parakeet`
+- `DEEPGRAM_API_KEY` if you want Deepgram enabled
 
-## Repo Setup
+## Install
 
-Install the main benchmark/live environment:
+Base environment:
 
 ```bash
 uv sync --extra dev
-cp .env.example .env
 ```
 
-Fill in `DEEPGRAM_API_KEY` in `.env` for Deepgram.
-
-The main `uv` environment covers:
-
-- benchmark CLI
-- Deepgram client
-- Sherpa runtime
-- Moonshine runtime
-- live microphone CLI
-
-Voxtral serving uses the optional `voxtral` extra. Parakeet uses a separate
-Python environment because NeMo has heavier and more CUDA-sensitive dependencies.
-
-## Provider Setup
-
-### Deepgram
-
-Only needs:
-
-```bash
-cp .env.example .env
-```
-
-Then set:
-
-```bash
-DEEPGRAM_API_KEY=...
-```
-
-### Voxtral
-
-Install the serve dependencies:
+If you want Voxtral serving from this repo too:
 
 ```bash
 uv sync --extra dev --extra voxtral
 ```
 
-Prepare the optimized local model copy:
+If you want client-side Voxtral EOU with Silero:
+
+```bash
+uv sync --extra dev --extra voxtral-eou
+```
+
+If you want Silero + Smart Turn:
+
+```bash
+uv sync --extra dev --extra voxtral-eou --extra voxtral-smart-turn
+```
+
+Set Deepgram if you use it:
+
+```bash
+export DEEPGRAM_API_KEY=...
+```
+
+## External Model Setup
+
+### Voxtral
+
+Prepare the optimized local model once:
 
 ```bash
 uv run stt-exp prepare-voxtral-model \
@@ -97,45 +78,45 @@ uv run stt-exp prepare-voxtral-model \
   --transcription-delay-ms 80
 ```
 
-Serve it:
+The live launcher will auto-start [scripts/serve_voxtral_optimized.sh](/home/logan/Projects/stt-exp/scripts/serve_voxtral_optimized.sh)
+when Voxtral is selected and nothing is already listening at
+`ws://127.0.0.1:8000/v1/realtime`.
 
-```bash
-./scripts/serve_voxtral_optimized.sh
-```
+Useful env vars:
 
-Baseline, without the local patch:
+- `VOXTRAL_URI`
+- `VOXTRAL_AUTOSTART=0`
+- `VOXTRAL_SERVE_SCRIPT`
+- `GPU_MEMORY_UTILIZATION`
+- `MAX_MODEL_LEN`
 
-```bash
-./scripts/serve_voxtral_baseline.sh
-```
+The default serve profile is intentionally conservative:
 
-Notes:
-
-- default server URL is `ws://127.0.0.1:8000/v1/realtime`
-- the serve scripts now default to a lower-memory realtime profile: `GPU_MEMORY_UTILIZATION=0.55` and `MAX_MODEL_LEN=4096`
-- adjust `GPU_MEMORY_UTILIZATION`, `MAX_MODEL_LEN`, `VLLM_HOST`, or `VLLM_PORT` via env vars if needed
-- `./scripts/run_live_external_models.sh` now auto-starts `./scripts/serve_voxtral_optimized.sh` when Voxtral is selected and no local server is already listening
+- `GPU_MEMORY_UTILIZATION=0.55`
+- `MAX_MODEL_LEN=4096`
 
 ### Sherpa
 
-Download the model into `models/`:
+Download the model once:
 
 ```bash
 uv run python scripts/download_sherpa_model.py
 ```
 
-Default target directory:
+Default expected location:
 
 ```text
 models/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14
 ```
 
-If you want a different location, either pass `--sherpa-model-dir` on the CLI or
-set `SHERPA_MODEL_DIR` in `.env`.
+Override with `SHERPA_MODEL_DIR` if needed.
 
 ### Parakeet
 
-Parakeet is intentionally kept in a separate env. Recommended repo-local setup:
+Parakeet is intentionally isolated in a separate Python environment because its
+NeMo stack is heavier and touchier than the main repo env.
+
+Example:
 
 ```bash
 uv venv .venv-parakeet --python 3.10
@@ -143,45 +124,124 @@ uv pip install --python .venv-parakeet/bin/python torch torchvision torchaudio
 uv pip install --python .venv-parakeet/bin/python nemo_toolkit[asr] soundfile librosa
 ```
 
-Then either export:
+Then point the launcher at it:
 
 ```bash
-PARAKEET_PYTHON=.venv-parakeet/bin/python
+export PARAKEET_PYTHON=.venv-parakeet/bin/python
 ```
 
-or put it in `.env`:
+Optional:
 
 ```bash
-PARAKEET_PYTHON=.venv-parakeet/bin/python
+export PARAKEET_DEVICE=auto
 ```
 
-The default model is:
+## Live Usage
 
-```text
-nvidia/parakeet_realtime_eou_120m-v1
+Run the main four-provider setup:
+
+```bash
+./scripts/run_live_external_models.sh
 ```
 
-It is downloaded automatically by NeMo on first use.
+Run Voxtral only:
 
-Note: the live Parakeet path is persistent and EOU-aware, but the frontend still
-recomputes mel features over accumulated audio. Encoder/decoder state is streamed;
-the feature extractor is not yet a fully incremental online frontend.
+```bash
+./scripts/run_live_external_models.sh --providers voxtral
+```
 
-### Moonshine
+Run without Deepgram:
 
-Moonshine is installed in the main environment and downloads its model on first run.
-It is available in the CLI but not part of the current main comparison.
+```bash
+./scripts/run_live_external_models.sh --providers voxtral sherpa parakeet
+```
 
-## Quick Start
+Pick a mic:
 
-Create a manifest from a directory of WAV files:
+```bash
+uv run stt-exp devices
+./scripts/run_live_external_models.sh --device 11
+```
+
+The launcher passes through `stt-exp live` flags, so any live CLI option can be
+added directly.
+
+## Voxtral EOU
+
+Supported modes:
+
+- `none`
+- `silero`
+- `silero-smart-turn`
+
+Run with explicit flags:
+
+```bash
+./scripts/run_live_external_models.sh \
+  --providers voxtral \
+  --voxtral-eou-mode silero \
+  --voxtral-eou-min-utterance-ms 300 \
+  --voxtral-eou-silero-min-silence-ms 500
+```
+
+More aggressive:
+
+```bash
+./scripts/run_live_external_models.sh \
+  --providers voxtral \
+  --voxtral-eou-mode silero \
+  --voxtral-eou-min-utterance-ms 120 \
+  --voxtral-eou-silero-min-silence-ms 180
+```
+
+Live hotkeys when Voxtral is active:
+
+- `r` clears the current utterance for all providers
+- `v` cycles Voxtral EOU mode
+- `g` cycles Voxtral EOU aggressiveness preset
+
+The live UI also prints a `[system] Voxtral EOU: ...` line so it is obvious when
+those keypresses are actually being seen.
+
+## Deterministic Debugging
+
+When live behavior is ambiguous, use the benchmark path with a WAV instead of
+testing by hand.
+
+Example:
+
+```bash
+uv run stt-exp benchmark \
+  --audio ../voxtral-realtime/test_wavs/001_hey_man_how_are_you.wav \
+  --reference "hey man how are you" \
+  --providers voxtral \
+  --chunk-ms 40 \
+  --pace realtime \
+  --voxtral-eou-mode silero \
+  --voxtral-eou-min-utterance-ms 300 \
+  --voxtral-eou-silero-min-silence-ms 500 \
+  --output results/voxtral-eou-debug.json
+```
+
+That output includes timing, transcript text, and provider event traces so you
+can see whether EOU actually fired, or whether the final came from end-of-audio.
+
+## Useful Commands
+
+List audio devices:
+
+```bash
+uv run stt-exp devices
+```
+
+Create a manifest from a WAV directory:
 
 ```bash
 uv run stt-exp make-manifest ../voxtral-realtime/test_wavs \
   --output data/test-wavs.csv
 ```
 
-Run the current four-way comparison:
+Run a file benchmark across the four main providers:
 
 ```bash
 uv run stt-exp benchmark \
@@ -189,100 +249,12 @@ uv run stt-exp benchmark \
   --providers deepgram voxtral sherpa parakeet \
   --chunk-ms 40 \
   --pace realtime \
-  --repeats 1 \
-  --parakeet-silence-chunks 2 \
-  --output results/compare-no-moonshine-s2.json
+  --repeats 1
 ```
 
-Single-file smoke test:
+## Notes
 
-```bash
-uv run stt-exp benchmark \
-  --audio ../voxtral-realtime/test_wavs/001_hey_man_how_are_you.wav \
-  --reference "hey man how are you" \
-  --providers deepgram voxtral sherpa parakeet \
-  --chunk-ms 40 \
-  --pace realtime
-```
-
-## Live CLI
-
-List devices:
-
-```bash
-uv run stt-exp devices
-```
-
-Run all main providers in parallel on the default input device:
-
-```bash
-uv run stt-exp live \
-  --providers deepgram voxtral sherpa parakeet \
-  --chunk-ms 40
-```
-
-Pick a specific mic:
-
-```bash
-uv run stt-exp live \
-  --providers deepgram voxtral sherpa parakeet \
-  --device 11 \
-  --chunk-ms 40
-```
-
-Behavior:
-
-- all selected providers run in parallel
-- the CLI prints partial text as each provider emits it
-- it also prints `FINAL ...` when that provider detects end-of-utterance
-
-## Metrics
-
-Each benchmark run records:
-
-- `ttft_ms`: first transcript text after the first audio chunk is sent
-- `final_latency_ms`: first audio chunk to final transcript
-- `tail_latency_ms`: last real audio chunk to final transcript
-- `realtime_factor`: wall time divided by audio duration
-- `wer` and `cer`: normalized quality metrics when a real reference is present
-
-`tail_latency_ms` is effectively "how long after the last real speech chunk did
-the final transcript show up", which includes endpointing behavior.
-
-## Reproducing The Existing Results
-
-1. `uv sync --extra dev --extra voxtral`
-2. Set `DEEPGRAM_API_KEY` in `.env`
-3. `uv run python scripts/download_sherpa_model.py`
-4. Create `.venv-parakeet` and install NeMo
-5. Prepare the optimized Voxtral model
-6. Start `./scripts/serve_voxtral_optimized.sh`
-7. Run:
-
-```bash
-uv run stt-exp benchmark \
-  --manifest data/test-wavs.csv \
-  --providers deepgram voxtral sherpa parakeet \
-  --chunk-ms 40 \
-  --pace realtime \
-  --repeats 1 \
-  --parakeet-silence-chunks 2 \
-  --output results/compare-no-moonshine-s2.json
-```
-
-## Files
-
-- [src/stt_exp/cli.py](/home/logan/Projects/stt-exp/src/stt_exp/cli.py)
-- [src/stt_exp/live_mic.py](/home/logan/Projects/stt-exp/src/stt_exp/live_mic.py)
-- [src/stt_exp/providers/deepgram_realtime.py](/home/logan/Projects/stt-exp/src/stt_exp/providers/deepgram_realtime.py)
-- [src/stt_exp/providers/voxtral_realtime.py](/home/logan/Projects/stt-exp/src/stt_exp/providers/voxtral_realtime.py)
-- [src/stt_exp/providers/sherpa_realtime.py](/home/logan/Projects/stt-exp/src/stt_exp/providers/sherpa_realtime.py)
-- [src/stt_exp/providers/parakeet_external.py](/home/logan/Projects/stt-exp/src/stt_exp/providers/parakeet_external.py)
-- [scripts/parakeet_live_worker.py](/home/logan/Projects/stt-exp/scripts/parakeet_live_worker.py)
-- [scripts/download_sherpa_model.py](/home/logan/Projects/stt-exp/scripts/download_sherpa_model.py)
-
-## Upstream References
-
-- Voxtral model card: https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602
-- Voxtral discussion: https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/discussions/11
-- vLLM realtime protocol: https://docs.vllm.ai/en/latest/api/vllm/entrypoints/openai/realtime/protocol/
+- the live launcher is the primary supported interface
+- the benchmark commands remain useful for repeatable debugging and regression checks
+- Parakeet live uses a persistent worker process in a separate env
+- Voxtral live now tolerates server startup/offline situations better and can be run by itself for focused testing

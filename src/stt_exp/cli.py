@@ -16,7 +16,6 @@ from stt_exp.manifest import BenchmarkItem, load_manifest, scan_audio_dir, write
 from stt_exp.metrics import compute_timing, score_transcript
 from stt_exp.providers.base import ProviderResult
 from stt_exp.providers.deepgram_realtime import DeepgramRealtimeConfig, DeepgramRealtimeProvider
-from stt_exp.providers.moonshine_realtime import MoonshineRealtimeConfig, MoonshineRealtimeProvider
 from stt_exp.providers.parakeet_external import ParakeetExternalConfig, ParakeetExternalProvider
 from stt_exp.providers.sherpa_realtime import SherpaRealtimeConfig, SherpaRealtimeProvider
 from stt_exp.providers.voxtral_realtime import VoxtralRealtimeConfig, VoxtralRealtimeProvider
@@ -45,7 +44,7 @@ def main() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Realtime STT benchmark harness.")
+    parser = argparse.ArgumentParser(description="Live and file-based STT harness.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     bench = subparsers.add_parser("benchmark", help="Run benchmark sessions.")
@@ -56,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--providers",
         nargs="+",
-        choices=["deepgram", "voxtral", "sherpa", "moonshine", "parakeet"],
+        choices=["deepgram", "voxtral", "sherpa", "parakeet"],
         default=["deepgram", "voxtral"],
     )
     bench.add_argument("--chunk-ms", type=int, default=40)
@@ -75,9 +74,6 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--sherpa-provider", type=str, default="cuda")
     bench.add_argument("--sherpa-num-threads", type=int, default=2)
     bench.add_argument("--sherpa-trailing-silence-ms", type=int, default=800)
-    bench.add_argument("--moonshine-language", type=str, default="en")
-    bench.add_argument("--moonshine-model-arch", type=int, default=None)
-    bench.add_argument("--moonshine-trailing-silence-ms", type=int, default=800)
     bench.add_argument(
         "--parakeet-python",
         type=str,
@@ -130,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument(
         "--providers",
         nargs="+",
-        choices=["deepgram", "voxtral", "sherpa", "moonshine", "parakeet"],
+        choices=["deepgram", "voxtral", "sherpa", "parakeet"],
         default=["deepgram", "voxtral"],
     )
     live.add_argument("--chunk-ms", type=int, default=40)
@@ -145,8 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     live.add_argument("--sherpa-provider", type=str, default="cuda")
     live.add_argument("--sherpa-num-threads", type=int, default=2)
-    live.add_argument("--moonshine-language", type=str, default="en")
-    live.add_argument("--moonshine-model-arch", type=int, default=None)
     live.add_argument(
         "--parakeet-python",
         type=str,
@@ -268,8 +262,6 @@ def run_live_command(args: argparse.Namespace) -> None:
             sherpa_model_dir=args.sherpa_model_dir,
             sherpa_provider=args.sherpa_provider,
             sherpa_num_threads=args.sherpa_num_threads,
-            moonshine_language=args.moonshine_language,
-            moonshine_model_arch=args.moonshine_model_arch,
             parakeet_python=args.parakeet_python,
             parakeet_worker_script=args.parakeet_worker_script,
             parakeet_model_id=args.parakeet_model_id,
@@ -362,19 +354,6 @@ def _build_providers(args: argparse.Namespace):
                         pace=args.pace,
                         warmup=True,
                         trailing_silence_ms=args.sherpa_trailing_silence_ms,
-                    )
-                )
-            )
-        elif name == "moonshine":
-            providers.append(
-                MoonshineRealtimeProvider(
-                    MoonshineRealtimeConfig(
-                        language=args.moonshine_language,
-                        model_arch=args.moonshine_model_arch,
-                        chunk_ms=args.chunk_ms,
-                        pace=args.pace,
-                        update_interval_s=max(args.chunk_ms / 1000.0, 0.1),
-                        trailing_silence_ms=args.moonshine_trailing_silence_ms,
                     )
                 )
             )

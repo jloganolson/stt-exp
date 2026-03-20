@@ -1,7 +1,7 @@
 [project]
 name = "stt-exp"
 version = "0.1.0"
-description = "Benchmark Deepgram realtime STT against Voxtral realtime STT."
+description = "Live and file-based STT harness for Deepgram, Voxtral, Sherpa, and Parakeet."
 readme = "README.md"
 authors = [
     { name = "Logan Olson", email = "jloganolson@gmail.com" }
@@ -12,7 +12,6 @@ dependencies = [
     "huggingface-hub>=0.31.0",
     "jiwer>=3.1.0",
     "librosa>=0.11.0",
-    "moonshine-voice>=0.0.51",
     "numpy>=2.2.0",
     "python-dotenv>=1.1.0",
     "sherpa-onnx==1.12.13+cuda12.cudnn9",
