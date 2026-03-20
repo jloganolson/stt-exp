@@ -1,0 +1,8 @@
+audio_path,reference_text,label
+/home/logan/Projects/voxtral-realtime/test_wavs/001_hey_man_how_are_you.wav,hey man how are you,001_hey_man_how_are_you
+/home/logan/Projects/voxtral-realtime/test_wavs/002_hey_man_how_are_you.wav,hey man how are you,002_hey_man_how_are_you
+/home/logan/Projects/voxtral-realtime/test_wavs/003_could_i_get_you_anything.wav,could i get you anything,003_could_i_get_you_anything
+/home/logan/Projects/voxtral-realtime/test_wavs/004_let_me_see_i_think.wav,let me see i think,004_let_me_see_i_think
+/home/logan/Projects/voxtral-realtime/test_wavs/005_hmm_i_dont_know_what.wav,hmm i dont know what,005_hmm_i_dont_know_what
+/home/logan/Projects/voxtral-realtime/test_wavs/006_wait_hold_on.wav,wait hold on,006_wait_hold_on
+/home/logan/Projects/voxtral-realtime/test_wavs/007_well_i_was_on_a.wav,well i was on a,007_well_i_was_on_a

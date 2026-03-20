@@ -1,0 +1,53 @@
+[project]
+name = "stt-exp"
+version = "0.1.0"
+description = "Benchmark Deepgram realtime STT against Voxtral realtime STT."
+readme = "README.md"
+authors = [
+    { name = "Logan Olson", email = "jloganolson@gmail.com" }
+]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "deepgram-sdk>=5.3",
+    "huggingface-hub>=0.31.0",
+    "jiwer>=3.1.0",
+    "librosa>=0.11.0",
+    "moonshine-voice>=0.0.51",
+    "numpy>=2.2.0",
+    "python-dotenv>=1.1.0",
+    "sherpa-onnx==1.12.13+cuda12.cudnn9",
+    "sounddevice>=0.5.0",
+    "websockets>=16.0",
+]
+
+[project.scripts]
+stt-exp = "stt_exp.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+voxtral = [
+    "soxr>=0.5.0",
+    "soundfile>=0.13.0",
+    "vllm",
+]
+
+[tool.uv]
+prerelease = "allow"
+
+[[tool.uv.index]]
+name = "vllm-nightly"
+url = "https://wheels.vllm.ai/nightly"
+explicit = true
+
+[tool.uv.sources]
+sherpa-onnx = { url = "https://huggingface.co/csukuangfj/sherpa-onnx-wheels/resolve/main/cuda/1.12.13/sherpa_onnx-1.12.13+cuda12.cudnn9-cp312-cp312-linux_x86_64.whl" }
+vllm = { index = "vllm-nightly" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
