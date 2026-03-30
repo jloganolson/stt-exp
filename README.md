@@ -136,6 +136,14 @@ Optional:
 export PARAKEET_DEVICE=auto
 ```
 
+Live tuning flags for Parakeet:
+
+- `--parakeet-eou-silence-ms`
+- `--parakeet-min-utterance-ms`
+- `--parakeet-force-finalize-ms`
+- `--parakeet-preroll-ms`
+- `--parakeet-rms-threshold`
+
 ## Live Usage
 
 Run the main four-provider setup:
@@ -165,6 +173,17 @@ uv run stt-exp devices
 
 The launcher passes through `stt-exp live` flags, so any live CLI option can be
 added directly.
+
+Example with more aggressive Parakeet finalization for short utterances:
+
+```bash
+./scripts/run_live_external_models.sh \
+  --providers deepgram parakeet \
+  --parakeet-eou-silence-ms 180 \
+  --parakeet-min-utterance-ms 50 \
+  --parakeet-force-finalize-ms 300 \
+  --parakeet-preroll-ms 120
+```
 
 ## Voxtral EOU
 

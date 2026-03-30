@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import types
+from typing import Any
 
 from stt_exp.cli import _default_parakeet_python
 from stt_exp.live_mic import (
@@ -161,6 +162,11 @@ def test_deepgram_and_parakeet_live_can_run_together(tmp_path, monkeypatch) -> N
         parakeet_worker_script=str(worker_script),
         parakeet_model_id="fake-model",
         parakeet_device="cpu",
+        parakeet_eou_silence_ms=240,
+        parakeet_min_utterance_ms=60,
+        parakeet_force_finalize_ms=400,
+        parakeet_preroll_ms=160,
+        parakeet_rms_threshold=0.008,
         voxtral_uri="ws://127.0.0.1:8000/v1/realtime",
         voxtral_model="voxtral",
         voxtral_eou_mode="none",
@@ -210,3 +216,95 @@ def test_deepgram_and_parakeet_live_can_run_together(tmp_path, monkeypatch) -> N
     assert ("parakeet", "final", "parakeet final") in emitted
     assert not any(provider == "parakeet" and "error:" in text for provider, _kind, text in emitted)
     assert not any(provider == "deepgram" and "error:" in text for provider, _kind, text in emitted)
+
+
+def test_run_parakeet_live_passes_tuning_flags(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeStdin:
+        def write(self, _text: str) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakeProc:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout: list[str] = []
+            self.returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr("stt_exp.live_mic.subprocess.Popen", fake_popen)
+
+    config = LiveConfig(
+        providers=["parakeet"],
+        chunk_ms=40,
+        device=None,
+        deepgram_model="nova-3",
+        deepgram_endpointing_ms=300,
+        deepgram_utterance_end_ms=1000,
+        sherpa_model_dir="",
+        sherpa_provider="cuda",
+        sherpa_num_threads=2,
+        parakeet_python="/tmp/parakeet-python",
+        parakeet_worker_script="/tmp/parakeet-worker.py",
+        parakeet_model_id="fake-model",
+        parakeet_device="cuda",
+        parakeet_eou_silence_ms=180,
+        parakeet_min_utterance_ms=50,
+        parakeet_force_finalize_ms=300,
+        parakeet_preroll_ms=120,
+        parakeet_rms_threshold=0.02,
+        voxtral_uri="ws://127.0.0.1:8000/v1/realtime",
+        voxtral_model="voxtral",
+        voxtral_eou_mode="none",
+        voxtral_eou_min_utterance_ms=300,
+        voxtral_eou_silero_threshold=0.5,
+        voxtral_eou_silero_min_silence_ms=500,
+        voxtral_eou_smart_turn_model_path=None,
+        voxtral_eou_smart_turn_cpu_count=1,
+    )
+    stop_event = threading.Event()
+    stop_event.set()
+
+    _run_parakeet_live(config, queue.Queue(), queue.Queue(), stop_event, lambda *_args, **_kwargs: None)
+
+    assert captured["cmd"] == [
+        "/tmp/parakeet-python",
+        "-u",
+        "/tmp/parakeet-worker.py",
+        "--model-id",
+        "fake-model",
+        "--device",
+        "cuda",
+        "--eou-silence-ms",
+        "180",
+        "--min-utterance-ms",
+        "50",
+        "--force-finalize-ms",
+        "300",
+        "--preroll-ms",
+        "120",
+        "--rms-threshold",
+        "0.02",
+    ]

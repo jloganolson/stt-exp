@@ -168,6 +168,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="nvidia/parakeet_realtime_eou_120m-v1",
     )
     live.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="auto")
+    live.add_argument("--parakeet-eou-silence-ms", type=int, default=240)
+    live.add_argument("--parakeet-min-utterance-ms", type=int, default=60)
+    live.add_argument("--parakeet-force-finalize-ms", type=int, default=400)
+    live.add_argument("--parakeet-preroll-ms", type=int, default=160)
+    live.add_argument("--parakeet-rms-threshold", type=float, default=0.008)
     live.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     live.add_argument("--voxtral-model", type=str, default=DEFAULT_VOXTRAL_REPO)
     live.add_argument("--voxtral-eou-mode", choices=VOXTRAL_EOU_MODES, default="none")
@@ -277,6 +282,11 @@ def run_live_command(args: argparse.Namespace) -> None:
             parakeet_worker_script=args.parakeet_worker_script,
             parakeet_model_id=args.parakeet_model_id,
             parakeet_device=args.parakeet_device,
+            parakeet_eou_silence_ms=args.parakeet_eou_silence_ms,
+            parakeet_min_utterance_ms=args.parakeet_min_utterance_ms,
+            parakeet_force_finalize_ms=args.parakeet_force_finalize_ms,
+            parakeet_preroll_ms=args.parakeet_preroll_ms,
+            parakeet_rms_threshold=args.parakeet_rms_threshold,
             voxtral_uri=args.voxtral_uri,
             voxtral_model=args.voxtral_model,
             voxtral_eou_mode=args.voxtral_eou_mode,

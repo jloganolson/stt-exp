@@ -50,6 +50,11 @@ class LiveConfig:
     parakeet_worker_script: str
     parakeet_model_id: str
     parakeet_device: str
+    parakeet_eou_silence_ms: int
+    parakeet_min_utterance_ms: int
+    parakeet_force_finalize_ms: int
+    parakeet_preroll_ms: int
+    parakeet_rms_threshold: float
     voxtral_uri: str
     voxtral_model: str
     voxtral_eou_mode: str
@@ -745,6 +750,16 @@ def _run_parakeet_live(
         config.parakeet_model_id,
         "--device",
         config.parakeet_device,
+        "--eou-silence-ms",
+        str(config.parakeet_eou_silence_ms),
+        "--min-utterance-ms",
+        str(config.parakeet_min_utterance_ms),
+        "--force-finalize-ms",
+        str(config.parakeet_force_finalize_ms),
+        "--preroll-ms",
+        str(config.parakeet_preroll_ms),
+        "--rms-threshold",
+        str(config.parakeet_rms_threshold),
     ]
 
     try:
