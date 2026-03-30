@@ -29,12 +29,23 @@ DEFAULT_SHERPA_MODEL_DIR = os.environ.get(
     "SHERPA_MODEL_DIR",
     str(REPO_ROOT / "models" / "sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14"),
 )
-DEFAULT_PARAKEET_PYTHON = os.environ.get(
-    "PARAKEET_PYTHON",
-    str(REPO_ROOT / ".venv-parakeet" / "bin" / "python"),
-)
 DEFAULT_PARAKEET_BENCH_WORKER = str(REPO_ROOT / "scripts" / "parakeet_worker.py")
 DEFAULT_PARAKEET_LIVE_WORKER = str(REPO_ROOT / "scripts" / "parakeet_live_worker.py")
+
+
+def _default_parakeet_python() -> str:
+    configured = os.environ.get("PARAKEET_PYTHON")
+    if configured:
+        return configured
+
+    candidates = (
+        REPO_ROOT / ".venv-parakeet" / "bin" / "python",
+        REPO_ROOT.parent / "parakeet-exp" / ".venv" / "bin" / "python",
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(candidates[0])
 
 
 def main() -> None:
@@ -77,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--parakeet-python",
         type=str,
-        default=DEFAULT_PARAKEET_PYTHON,
+        default=_default_parakeet_python(),
     )
     bench.add_argument(
         "--parakeet-worker-script",
@@ -144,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument(
         "--parakeet-python",
         type=str,
-        default=DEFAULT_PARAKEET_PYTHON,
+        default=_default_parakeet_python(),
     )
     live.add_argument(
         "--parakeet-worker-script",

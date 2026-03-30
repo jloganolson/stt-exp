@@ -1,4 +1,19 @@
-from stt_exp.live_mic import _append_voxtral_delta, _format_voxtral_connection_error
+from __future__ import annotations
+
+import queue
+import sys
+import threading
+import time
+import types
+
+from stt_exp.cli import _default_parakeet_python
+from stt_exp.live_mic import (
+    LiveConfig,
+    _append_voxtral_delta,
+    _format_voxtral_connection_error,
+    _run_deepgram_live,
+    _run_parakeet_live,
+)
 
 
 def test_format_voxtral_connection_error_local_uri() -> None:
@@ -25,3 +40,173 @@ def test_append_voxtral_delta_preserves_leading_space() -> None:
     current_text = _append_voxtral_delta("what's", " up")
 
     assert current_text == "what's up"
+
+
+def test_default_parakeet_python_falls_back_to_sibling_repo(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path / "stt-exp"
+    sibling_python = tmp_path / "parakeet-exp" / ".venv" / "bin" / "python"
+    sibling_python.parent.mkdir(parents=True)
+    sibling_python.write_text("", encoding="utf-8")
+
+    monkeypatch.delenv("PARAKEET_PYTHON", raising=False)
+    monkeypatch.setattr("stt_exp.cli.REPO_ROOT", repo_root)
+
+    assert _default_parakeet_python() == str(sibling_python)
+
+
+def test_deepgram_and_parakeet_live_can_run_together(tmp_path, monkeypatch) -> None:
+    worker_script = tmp_path / "fake_parakeet_worker.py"
+    worker_script.write_text(
+        "\n".join(
+            [
+                "import json",
+                "import sys",
+                'MARKER = "PARAKEET_LIVE_EVENT_JSON="',
+                'print(MARKER + json.dumps({"type": "status", "message": "connected"}), flush=True)',
+                "seen_audio = False",
+                "for raw_line in sys.stdin:",
+                "    message = json.loads(raw_line)",
+                '    if message.get("type") == "audio" and not seen_audio:',
+                "        seen_audio = True",
+                '        print(MARKER + json.dumps({"type": "partial", "text": "parakeet partial"}), flush=True)',
+                '        print(MARKER + json.dumps({"type": "final", "text": "parakeet final"}), flush=True)',
+                '    elif message.get("type") == "stop":',
+                "        break",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeEventType:
+        OPEN = "open"
+        MESSAGE = "message"
+        ERROR = "error"
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.callbacks: dict[str, object] = {}
+            self.closed = threading.Event()
+
+        def on(self, event_type, callback) -> None:
+            self.callbacks[event_type] = callback
+
+        def start_listening(self) -> None:
+            self.callbacks[FakeEventType.OPEN](self)
+            self.closed.wait(timeout=5)
+
+        def send_media(self, _chunk: bytes) -> None:
+            self.callbacks[FakeEventType.MESSAGE](
+                {"type": "Results", "channel": {"alternatives": [{"transcript": "deepgram partial"}]}}
+            )
+            self.callbacks[FakeEventType.MESSAGE](
+                {
+                    "type": "Results",
+                    "channel": {"alternatives": [{"transcript": "deepgram final"}]},
+                    "is_final": True,
+                }
+            )
+
+        def send_finalize(self) -> None:
+            return None
+
+        def send_close_stream(self) -> None:
+            self.closed.set()
+
+    class FakeContext:
+        def __init__(self, socket: FakeSocket) -> None:
+            self.socket = socket
+
+        def __enter__(self) -> FakeSocket:
+            return self.socket
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self.socket.send_close_stream()
+            return None
+
+    class FakeClient:
+        def __init__(self, *, api_key: str) -> None:
+            assert api_key == "test-key"
+            self.listen = types.SimpleNamespace(v1=self)
+
+        def connect(self, **_kwargs) -> FakeContext:
+            return FakeContext(FakeSocket())
+
+    fake_deepgram = types.ModuleType("deepgram")
+    fake_deepgram.DeepgramClient = FakeClient
+    fake_events = types.ModuleType("deepgram.core.events")
+    fake_events.EventType = FakeEventType
+    monkeypatch.setitem(sys.modules, "deepgram", fake_deepgram)
+    monkeypatch.setitem(sys.modules, "deepgram.core.events", fake_events)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "test-key")
+
+    emitted: list[tuple[str, str, str]] = []
+    emit_lock = threading.Lock()
+
+    def emit(provider: str, text: str, kind: str = "status") -> None:
+        with emit_lock:
+            emitted.append((provider, kind, text))
+
+    config = LiveConfig(
+        providers=["deepgram", "parakeet"],
+        chunk_ms=40,
+        device=None,
+        deepgram_model="nova-3",
+        deepgram_endpointing_ms=300,
+        deepgram_utterance_end_ms=1000,
+        sherpa_model_dir="",
+        sherpa_provider="cuda",
+        sherpa_num_threads=2,
+        parakeet_python=sys.executable,
+        parakeet_worker_script=str(worker_script),
+        parakeet_model_id="fake-model",
+        parakeet_device="cpu",
+        voxtral_uri="ws://127.0.0.1:8000/v1/realtime",
+        voxtral_model="voxtral",
+        voxtral_eou_mode="none",
+        voxtral_eou_min_utterance_ms=300,
+        voxtral_eou_silero_threshold=0.5,
+        voxtral_eou_silero_min_silence_ms=500,
+        voxtral_eou_smart_turn_model_path=None,
+        voxtral_eou_smart_turn_cpu_count=1,
+    )
+
+    stop_event = threading.Event()
+    deepgram_audio_queue: queue.Queue[bytes] = queue.Queue()
+    deepgram_control_queue: queue.Queue[str] = queue.Queue()
+    parakeet_audio_queue: queue.Queue[bytes] = queue.Queue()
+    parakeet_control_queue: queue.Queue[str] = queue.Queue()
+
+    deepgram_thread = threading.Thread(
+        target=_run_deepgram_live,
+        args=(config, deepgram_audio_queue, deepgram_control_queue, stop_event, emit),
+        daemon=True,
+    )
+    parakeet_thread = threading.Thread(
+        target=_run_parakeet_live,
+        args=(config, parakeet_audio_queue, parakeet_control_queue, stop_event, emit),
+        daemon=True,
+    )
+
+    deepgram_thread.start()
+    parakeet_thread.start()
+    deepgram_audio_queue.put(b"\x00\x00" * 160)
+    parakeet_audio_queue.put(b"\x00\x00" * 160)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        with emit_lock:
+            saw_deepgram = ("deepgram", "final", "deepgram final") in emitted
+            saw_parakeet = ("parakeet", "final", "parakeet final") in emitted
+        if saw_deepgram and saw_parakeet:
+            break
+        time.sleep(0.05)
+
+    stop_event.set()
+    deepgram_thread.join(timeout=2)
+    parakeet_thread.join(timeout=2)
+
+    assert ("deepgram", "final", "deepgram final") in emitted
+    assert ("parakeet", "final", "parakeet final") in emitted
+    assert not any(provider == "parakeet" and "error:" in text for provider, _kind, text in emitted)
+    assert not any(provider == "deepgram" and "error:" in text for provider, _kind, text in emitted)
