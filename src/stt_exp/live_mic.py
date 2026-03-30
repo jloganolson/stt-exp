@@ -12,7 +12,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from urllib.parse import urlparse
 
@@ -33,6 +33,55 @@ load_dotenv()
 
 
 SAMPLE_RATE = 16_000
+PARAKEET_CONTROL_CYCLE_PRESET = "parakeet.preset.cycle"
+
+
+@dataclass(frozen=True, slots=True)
+class ParakeetLivePreset:
+    name: str
+    eou_silence_ms: int
+    min_utterance_ms: int
+    force_finalize_ms: int
+    preroll_ms: int
+    rms_threshold: float
+
+
+PARAKEET_LIVE_PRESETS = (
+    ParakeetLivePreset(
+        name="balanced",
+        eou_silence_ms=240,
+        min_utterance_ms=60,
+        force_finalize_ms=400,
+        preroll_ms=160,
+        rms_threshold=0.008,
+    ),
+    ParakeetLivePreset(
+        name="fast",
+        eou_silence_ms=180,
+        min_utterance_ms=50,
+        force_finalize_ms=300,
+        preroll_ms=120,
+        rms_threshold=0.008,
+    ),
+    ParakeetLivePreset(
+        name="faster",
+        eou_silence_ms=140,
+        min_utterance_ms=40,
+        force_finalize_ms=220,
+        preroll_ms=120,
+        rms_threshold=0.007,
+    ),
+    ParakeetLivePreset(
+        name="hair",
+        eou_silence_ms=100,
+        min_utterance_ms=30,
+        force_finalize_ms=160,
+        preroll_ms=80,
+        rms_threshold=0.006,
+    ),
+)
+
+PARAKEET_LIVE_PRESET_NAMES = tuple(preset.name for preset in PARAKEET_LIVE_PRESETS)
 
 
 @dataclass(slots=True)
@@ -50,6 +99,7 @@ class LiveConfig:
     parakeet_worker_script: str
     parakeet_model_id: str
     parakeet_device: str
+    parakeet_preset: str
     parakeet_eou_silence_ms: int
     parakeet_min_utterance_ms: int
     parakeet_force_finalize_ms: int
@@ -231,6 +281,37 @@ def _append_voxtral_delta(current_text: str, delta: str) -> str:
     return current_text + delta
 
 
+def cycle_parakeet_live_preset_name(name: str) -> str:
+    try:
+        index = PARAKEET_LIVE_PRESET_NAMES.index(name)
+    except ValueError:
+        return PARAKEET_LIVE_PRESET_NAMES[0]
+    return PARAKEET_LIVE_PRESET_NAMES[(index + 1) % len(PARAKEET_LIVE_PRESET_NAMES)]
+
+
+def apply_parakeet_live_preset(config: LiveConfig, preset_name: str) -> LiveConfig:
+    preset = next((item for item in PARAKEET_LIVE_PRESETS if item.name == preset_name), None)
+    if preset is None:
+        raise ValueError(f"Unknown Parakeet preset: {preset_name}")
+    return replace(
+        config,
+        parakeet_preset=preset.name,
+        parakeet_eou_silence_ms=preset.eou_silence_ms,
+        parakeet_min_utterance_ms=preset.min_utterance_ms,
+        parakeet_force_finalize_ms=preset.force_finalize_ms,
+        parakeet_preroll_ms=preset.preroll_ms,
+        parakeet_rms_threshold=preset.rms_threshold,
+    )
+
+
+def summarize_parakeet_live_config(config: LiveConfig) -> str:
+    return (
+        f"{config.parakeet_preset} silence={config.parakeet_eou_silence_ms}ms "
+        f"min={config.parakeet_min_utterance_ms}ms force={config.parakeet_force_finalize_ms}ms "
+        f"preroll={config.parakeet_preroll_ms}ms rms={config.parakeet_rms_threshold:.3f}"
+    )
+
+
 def _build_voxtral_live_eou_config(config: LiveConfig) -> VoxtralEouConfig:
     return VoxtralEouConfig(
         mode=config.voxtral_eou_mode,
@@ -296,7 +377,14 @@ def run_live(config: LiveConfig) -> None:
         threads.append(
             threading.Thread(
                 target=_run_parakeet_live,
-                args=(config, queues["parakeet"], control_queues["parakeet"], stop_event, display.emit),
+                args=(
+                    config,
+                    queues["parakeet"],
+                    control_queues["parakeet"],
+                    stop_event,
+                    display.emit,
+                    display.set_system_status,
+                ),
                 daemon=True,
             )
         )
@@ -309,6 +397,10 @@ def run_live(config: LiveConfig) -> None:
         display.set_system_status(
             f"Voxtral EOU: {summarize_voxtral_eou_config(_build_voxtral_live_eou_config(config))}"
         )
+    if "parakeet" in config.providers:
+        print("[system] Parakeet hotkeys: p cycles live preset.", flush=True)
+        if "voxtral" not in config.providers:
+            display.set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(config)}")
     display.init()
 
     for thread in threads:
@@ -352,6 +444,12 @@ def run_live(config: LiveConfig) -> None:
                         if "voxtral" in config.providers and key.lower() == "g":
                             try:
                                 control_queues["voxtral"].put_nowait(VOXTRAL_EOU_CONTROL_CYCLE_PRESET)
+                            except queue.Full:
+                                pass
+                            continue
+                        if "parakeet" in config.providers and key.lower() == "p":
+                            try:
+                                control_queues["parakeet"].put_nowait(PARAKEET_CONTROL_CYCLE_PRESET)
                             except queue.Full:
                                 pass
                             continue
@@ -740,26 +838,30 @@ def _run_parakeet_live(
     control_queue: queue.Queue[str],
     stop_event: threading.Event,
     emit,
+    set_system_status,
 ) -> None:
     marker = "PARAKEET_LIVE_EVENT_JSON="
+    active_config = config
     cmd = [
-        config.parakeet_python,
+        active_config.parakeet_python,
         "-u",
-        config.parakeet_worker_script,
+        active_config.parakeet_worker_script,
         "--model-id",
-        config.parakeet_model_id,
+        active_config.parakeet_model_id,
         "--device",
-        config.parakeet_device,
+        active_config.parakeet_device,
+        "--preset",
+        active_config.parakeet_preset,
         "--eou-silence-ms",
-        str(config.parakeet_eou_silence_ms),
+        str(active_config.parakeet_eou_silence_ms),
         "--min-utterance-ms",
-        str(config.parakeet_min_utterance_ms),
+        str(active_config.parakeet_min_utterance_ms),
         "--force-finalize-ms",
-        str(config.parakeet_force_finalize_ms),
+        str(active_config.parakeet_force_finalize_ms),
         "--preroll-ms",
-        str(config.parakeet_preroll_ms),
+        str(active_config.parakeet_preroll_ms),
         "--rms-threshold",
-        str(config.parakeet_rms_threshold),
+        str(active_config.parakeet_rms_threshold),
     ]
 
     try:
@@ -790,7 +892,10 @@ def _run_parakeet_live(
                 continue
             msg_type = message.get("type")
             if msg_type == "status":
-                emit("parakeet", message.get("message", "status"), kind="status")
+                status_text = message.get("message", "status")
+                emit("parakeet", status_text, kind="status")
+                if "preset=" in status_text:
+                    set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(active_config)}")
             elif msg_type == "partial":
                 text = message.get("text", "").strip()
                 if text:
@@ -821,6 +926,29 @@ def _run_parakeet_live(
             if action == "reset":
                 proc.stdin.write(json.dumps({"type": "reset"}) + "\n")
                 proc.stdin.flush()
+                continue
+            if action == PARAKEET_CONTROL_CYCLE_PRESET:
+                active_config = apply_parakeet_live_preset(
+                    active_config,
+                    cycle_parakeet_live_preset_name(active_config.parakeet_preset),
+                )
+                proc.stdin.write(
+                    json.dumps(
+                        {
+                            "type": "set_config",
+                            "preset": active_config.parakeet_preset,
+                            "eou_silence_ms": active_config.parakeet_eou_silence_ms,
+                            "min_utterance_ms": active_config.parakeet_min_utterance_ms,
+                            "force_finalize_ms": active_config.parakeet_force_finalize_ms,
+                            "preroll_ms": active_config.parakeet_preroll_ms,
+                            "rms_threshold": active_config.parakeet_rms_threshold,
+                        }
+                    )
+                    + "\n"
+                )
+                proc.stdin.flush()
+                set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(active_config)}")
+                emit("parakeet", f"preset -> {summarize_parakeet_live_config(active_config)}", kind="status")
                 continue
             try:
                 chunk = audio_queue.get(timeout=0.1)

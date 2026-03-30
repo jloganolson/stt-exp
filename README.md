@@ -138,6 +138,7 @@ export PARAKEET_DEVICE=auto
 
 Live tuning flags for Parakeet:
 
+- `--parakeet-preset`
 - `--parakeet-eou-silence-ms`
 - `--parakeet-min-utterance-ms`
 - `--parakeet-force-finalize-ms`
@@ -179,11 +180,17 @@ Example with more aggressive Parakeet finalization for short utterances:
 ```bash
 ./scripts/run_live_external_models.sh \
   --providers deepgram parakeet \
+  --parakeet-preset fast \
   --parakeet-eou-silence-ms 180 \
   --parakeet-min-utterance-ms 50 \
   --parakeet-force-finalize-ms 300 \
   --parakeet-preroll-ms 120
 ```
+
+Live hotkeys when Parakeet is active:
+
+- `r` clears the current utterance for all providers
+- `p` cycles the Parakeet live preset
 
 ## Voxtral EOU
 

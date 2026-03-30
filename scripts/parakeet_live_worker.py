@@ -31,6 +31,7 @@ SAMPLE_RATE = 16_000
 class LiveParakeetConfig:
     model_id: str
     device: str
+    preset: str
     eou_silence_ms: int
     min_utterance_ms: int
     force_finalize_ms: int
@@ -40,6 +41,15 @@ class LiveParakeetConfig:
 
 def emit(message: dict[str, object]) -> None:
     print(f"{MARKER}{json.dumps(message)}", flush=True)
+
+
+def _format_status(config: LiveParakeetConfig, *, step_ms: int, device_type: str) -> str:
+    return (
+        f"connected model={config.model_id} step_ms={step_ms} device={device_type} "
+        f"preset={config.preset} eou_silence_ms={config.eou_silence_ms} "
+        f"min_utterance_ms={config.min_utterance_ms} force_finalize_ms={config.force_finalize_ms} "
+        f"preroll_ms={config.preroll_ms} rms_threshold={config.rms_threshold}"
+    )
 
 
 class ParakeetLiveStreamer:
@@ -294,11 +304,16 @@ class ParakeetLiveStreamer:
     def reset(self) -> None:
         self._reset_stream_state()
 
+    def update_config(self, config: LiveParakeetConfig) -> None:
+        self.config = config
+        self._reset_stream_state()
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="nvidia/parakeet_realtime_eou_120m-v1")
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    parser.add_argument("--preset", default="balanced")
     parser.add_argument("--eou-silence-ms", type=int, default=240)
     parser.add_argument("--min-utterance-ms", type=int, default=60)
     parser.add_argument("--force-finalize-ms", type=int, default=400)
@@ -311,6 +326,7 @@ def main() -> None:
             LiveParakeetConfig(
                 model_id=args.model_id,
                 device=args.device,
+                preset=args.preset,
                 eou_silence_ms=args.eou_silence_ms,
                 min_utterance_ms=args.min_utterance_ms,
                 force_finalize_ms=args.force_finalize_ms,
@@ -325,12 +341,7 @@ def main() -> None:
     emit(
         {
             "type": "status",
-            "message": (
-                f"connected model={args.model_id} step_ms={streamer.step_ms} device={streamer.device.type} "
-                f"eou_silence_ms={args.eou_silence_ms} min_utterance_ms={args.min_utterance_ms} "
-                f"force_finalize_ms={args.force_finalize_ms} preroll_ms={args.preroll_ms} "
-                f"rms_threshold={args.rms_threshold}"
-            ),
+            "message": _format_status(streamer.config, step_ms=streamer.step_ms, device_type=streamer.device.type),
         }
     )
 
@@ -354,6 +365,28 @@ def main() -> None:
         elif msg_type == "reset":
             streamer.reset()
             emit({"type": "status", "message": "manual reset"})
+        elif msg_type == "set_config":
+            try:
+                next_config = LiveParakeetConfig(
+                    model_id=streamer.config.model_id,
+                    device=streamer.config.device,
+                    preset=str(message.get("preset", streamer.config.preset)),
+                    eou_silence_ms=int(message.get("eou_silence_ms", streamer.config.eou_silence_ms)),
+                    min_utterance_ms=int(message.get("min_utterance_ms", streamer.config.min_utterance_ms)),
+                    force_finalize_ms=int(message.get("force_finalize_ms", streamer.config.force_finalize_ms)),
+                    preroll_ms=int(message.get("preroll_ms", streamer.config.preroll_ms)),
+                    rms_threshold=float(message.get("rms_threshold", streamer.config.rms_threshold)),
+                )
+            except (TypeError, ValueError) as exc:
+                emit({"type": "error", "message": f"invalid config update: {exc}"})
+                break
+            streamer.update_config(next_config)
+            emit(
+                {
+                    "type": "status",
+                    "message": _format_status(streamer.config, step_ms=streamer.step_ms, device_type=streamer.device.type),
+                }
+            )
         elif msg_type == "stop":
             streamer.flush()
             break
