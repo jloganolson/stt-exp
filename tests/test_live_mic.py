@@ -13,6 +13,8 @@ from stt_exp.live_mic import (
     PARAKEET_CONTROL_CYCLE_PRESET,
     LiveConfig,
     _append_voxtral_delta,
+    _format_parakeet_confidence,
+    _format_parakeet_text_event,
     _format_voxtral_connection_error,
     _run_deepgram_live,
     _run_parakeet_live,
@@ -45,6 +47,15 @@ def test_append_voxtral_delta_preserves_leading_space() -> None:
     current_text = _append_voxtral_delta("what's", " up")
 
     assert current_text == "what's up"
+
+
+def test_format_parakeet_confidence_and_text_event() -> None:
+    confidence = {"label": "medium", "avg": 0.74, "min": 0.42}
+
+    assert _format_parakeet_confidence(confidence) == " [conf medium avg=0.74 min=0.42]"
+    assert _format_parakeet_text_event({"text": "hello there", "confidence": confidence}) == (
+        "hello there [conf medium avg=0.74 min=0.42]"
+    )
 
 
 def test_default_parakeet_python_falls_back_to_sibling_repo(tmp_path, monkeypatch) -> None:
@@ -101,6 +112,7 @@ def test_cycle_and_apply_parakeet_live_preset() -> None:
     assert updated.parakeet_min_utterance_ms == 30
     assert updated.parakeet_force_finalize_ms == 160
     assert cycle_parakeet_live_preset_name("hair") == "accurate"
+    assert cycle_parakeet_live_preset_name("accurate") == "very-accurate"
 
     accurate = apply_parakeet_live_preset(config, "accurate")
     assert accurate.parakeet_preset == "accurate"
@@ -117,6 +129,57 @@ def test_cycle_and_apply_parakeet_live_preset() -> None:
     assert very_accurate.parakeet_force_finalize_ms == 750
     assert very_accurate.parakeet_preroll_ms == 280
     assert very_accurate.parakeet_rms_threshold == 0.006
+    assert cycle_parakeet_live_preset_name("very-accurate") == "balanced"
+
+
+def test_run_live_command_defaults_to_accurate_preset(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_live(config: LiveConfig) -> None:
+        captured["config"] = config
+
+    monkeypatch.setattr("stt_exp.cli.run_live", fake_run_live)
+
+    run_live_command(
+        Namespace(
+            providers=["parakeet"],
+            chunk_ms=40,
+            device=None,
+            deepgram_model="nova-3",
+            deepgram_endpointing_ms=300,
+            deepgram_utterance_end_ms=1000,
+            sherpa_model_dir="",
+            sherpa_provider="cuda",
+            sherpa_num_threads=2,
+            parakeet_python="/tmp/python",
+            parakeet_worker_script="/tmp/worker.py",
+            parakeet_model_id="fake-model",
+            parakeet_device="cuda",
+            parakeet_live_mode="tuned",
+            parakeet_preset="accurate",
+            parakeet_eou_silence_ms=None,
+            parakeet_min_utterance_ms=None,
+            parakeet_force_finalize_ms=None,
+            parakeet_preroll_ms=None,
+            parakeet_rms_threshold=None,
+            voxtral_uri="ws://127.0.0.1:8000/v1/realtime",
+            voxtral_model="voxtral",
+            voxtral_eou_mode="none",
+            voxtral_eou_min_utterance_ms=300,
+            voxtral_eou_silero_threshold=0.5,
+            voxtral_eou_silero_min_silence_ms=500,
+            voxtral_eou_smart_turn_model_path=None,
+            voxtral_eou_smart_turn_cpu_count=1,
+        )
+    )
+
+    config = captured["config"]
+    assert config.parakeet_preset == "accurate"
+    assert config.parakeet_eou_silence_ms == 320
+    assert config.parakeet_min_utterance_ms == 70
+    assert config.parakeet_force_finalize_ms == 550
+    assert config.parakeet_preroll_ms == 220
+    assert config.parakeet_rms_threshold == 0.007
 
 
 def test_run_live_command_applies_parakeet_preset(monkeypatch) -> None:

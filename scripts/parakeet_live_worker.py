@@ -129,6 +129,8 @@ class ParakeetLiveStreamer:
         self.last_token = None
         self.dec_state = None
         self.all_tokens: list[int] = []
+        self.token_confidences: list[float] = []
+        self.token_margins: list[float] = []
         self.prev_text = ""
         self.audio_buffer = np.zeros((0,), dtype=np.float32)
         self.preroll_buffer = np.zeros((0,), dtype=np.float32)
@@ -144,6 +146,28 @@ class ParakeetLiveStreamer:
         if not self.all_tokens:
             return ""
         return self.model.tokenizer.ids_to_text(self.all_tokens).strip()
+
+    def _confidence_summary(self) -> dict[str, float | str] | None:
+        if not self.token_confidences:
+            return None
+        avg_conf = float(sum(self.token_confidences) / len(self.token_confidences))
+        min_conf = float(min(self.token_confidences))
+        last_conf = float(self.token_confidences[-1])
+        avg_margin = float(sum(self.token_margins) / len(self.token_margins)) if self.token_margins else 0.0
+        if avg_conf >= 0.85 and min_conf >= 0.55:
+            label = "high"
+        elif avg_conf >= 0.65 and min_conf >= 0.35:
+            label = "medium"
+        else:
+            label = "low"
+        return {
+            "label": label,
+            "avg": round(avg_conf, 3),
+            "min": round(min_conf, 3),
+            "last": round(last_conf, 3),
+            "avg_margin": round(avg_margin, 3),
+            "tokens": len(self.token_confidences),
+        }
 
     def _utterance_duration_ms(self) -> float:
         return (self.audio_buffer.shape[0] / SAMPLE_RATE) * 1000.0
@@ -169,11 +193,17 @@ class ParakeetLiveStreamer:
                 logp = self.greedy._joint_step(frame, g, log_normalize=None)[0, 0, 0, :]
                 if logp.dtype != torch.float32:
                     logp = logp.float()
+                probs = torch.softmax(logp, dim=0)
                 token_id = logp.argmax().item()
                 if token_id == self.greedy._blank_index:
                     not_blank = False
                 else:
+                    top_probs = torch.topk(probs, k=min(2, probs.shape[0]))
+                    top1_prob = float(probs[token_id].item())
+                    top2_prob = float(top_probs.values[1].item()) if top_probs.values.shape[0] > 1 else 0.0
                     self.all_tokens.append(token_id)
+                    self.token_confidences.append(top1_prob)
+                    self.token_margins.append(max(0.0, top1_prob - top2_prob))
                     new_tokens.append(token_id)
                     self.dec_state = hidden_prime
                     self.last_token = token_id
@@ -223,11 +253,13 @@ class ParakeetLiveStreamer:
                 if current_text and current_text != self.prev_text:
                     self.last_text_change_at = time.monotonic()
                     self.last_audio_pos_s = round(actual_end * 0.01, 3)
+                    confidence = self._confidence_summary()
                     emit(
                         {
                             "type": "partial",
                             "text": current_text,
                             "audio_pos_s": self.last_audio_pos_s,
+                            "confidence": confidence,
                         }
                     )
                     self.prev_text = current_text
@@ -243,12 +275,14 @@ class ParakeetLiveStreamer:
     def _emit_final_and_reset(self, text: str, *, reason: str) -> None:
         final_text = text.strip()
         if final_text:
+            confidence = self._confidence_summary()
             emit(
                 {
                     "type": "final",
                     "text": final_text,
                     "audio_pos_s": self.last_audio_pos_s or round(self.audio_buffer.shape[0] / SAMPLE_RATE, 3),
                     "reason": reason,
+                    "confidence": confidence,
                 }
             )
         self._reset_stream_state()
@@ -259,6 +293,15 @@ class ParakeetLiveStreamer:
         if current_text and self._utterance_duration_ms() >= self.config.min_utterance_ms:
             self._emit_final_and_reset(current_text, reason=reason)
             return
+        if self.utterance_started_at is not None and self._utterance_duration_ms() >= self.config.min_utterance_ms:
+            emit(
+                {
+                    "type": "no_transcript",
+                    "reason": reason,
+                    "audio_pos_s": round(self.audio_buffer.shape[0] / SAMPLE_RATE, 3),
+                    "utterance_ms": round(self._utterance_duration_ms(), 1),
+                }
+            )
         self._reset_stream_state()
 
     def _maybe_finalize_on_fallback(self) -> None:
@@ -354,7 +397,7 @@ def main() -> None:
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
     parser.add_argument("--live-mode", choices=["legacy", "tuned"], default="tuned")
-    parser.add_argument("--preset", default="balanced")
+    parser.add_argument("--preset", default="accurate")
     parser.add_argument("--eou-silence-ms", type=int, default=240)
     parser.add_argument("--min-utterance-ms", type=int, default=60)
     parser.add_argument("--force-finalize-ms", type=int, default=400)

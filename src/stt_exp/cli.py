@@ -182,7 +182,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="auto")
     live.add_argument("--parakeet-att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
     live.add_argument("--parakeet-live-mode", choices=PARAKEET_LIVE_MODE_CHOICES, default="tuned")
-    live.add_argument("--parakeet-preset", choices=PARAKEET_LIVE_PRESET_NAMES, default="balanced")
+    live.add_argument("--parakeet-preset", choices=PARAKEET_LIVE_PRESET_NAMES, default="accurate")
     live.add_argument("--parakeet-eou-silence-ms", type=int, default=None)
     live.add_argument("--parakeet-min-utterance-ms", type=int, default=None)
     live.add_argument("--parakeet-force-finalize-ms", type=int, default=None)

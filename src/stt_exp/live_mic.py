@@ -333,6 +333,27 @@ def summarize_parakeet_live_config(config: LiveConfig) -> str:
     )
 
 
+def _format_parakeet_confidence(confidence: dict[str, object] | None) -> str:
+    if not isinstance(confidence, dict):
+        return ""
+    label = str(confidence.get("label") or "").strip()
+    avg = confidence.get("avg")
+    min_conf = confidence.get("min")
+    parts: list[str] = []
+    if label:
+        parts.append(label)
+    if isinstance(avg, (int, float)):
+        parts.append(f"avg={float(avg):.2f}")
+    if isinstance(min_conf, (int, float)):
+        parts.append(f"min={float(min_conf):.2f}")
+    return f" [conf {' '.join(parts)}]" if parts else ""
+
+
+def _format_parakeet_text_event(message: dict[str, object]) -> str:
+    text = str(message.get("text", "")).strip()
+    return f"{text}{_format_parakeet_confidence(message.get('confidence'))}".strip()
+
+
 def _build_voxtral_live_eou_config(config: LiveConfig) -> VoxtralEouConfig:
     return VoxtralEouConfig(
         mode=config.voxtral_eou_mode,
@@ -935,13 +956,20 @@ def _run_parakeet_live(
                 if "preset=" in status_text:
                     set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(active_config)}")
             elif msg_type == "partial":
-                text = message.get("text", "").strip()
+                text = _format_parakeet_text_event(message)
                 if text:
                     emit("parakeet", text, kind="replace")
             elif msg_type == "final":
-                text = message.get("text", "").strip()
+                text = _format_parakeet_text_event(message)
                 if text:
                     emit("parakeet", text, kind="final")
+            elif msg_type == "no_transcript":
+                reason = str(message.get("reason", "unknown")).strip() or "unknown"
+                utterance_ms = message.get("utterance_ms")
+                detail = f"speech/no transcript reason={reason}"
+                if isinstance(utterance_ms, (int, float)):
+                    detail += f" dur={float(utterance_ms):.0f}ms"
+                emit("parakeet", detail, kind="status")
             elif msg_type == "error":
                 emit("parakeet", f"error: {message.get('message', 'unknown worker error')}", kind="status")
                 stop_event.set()

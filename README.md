@@ -215,7 +215,7 @@ off too early:
 
 Available tuned presets currently range from `hair` and `fast` on the
 aggressive/low-latency end up through `balanced`, `accurate`, and
-`very-accurate` on the safer end.
+`very-accurate` on the safer end. The live CLI now defaults to `accurate`.
 
 Compare Deepgram against the multitalker Parakeet checkpoint on GPU:
 
@@ -239,6 +239,11 @@ Live hotkeys when Parakeet is active:
 
 - `r` clears the current utterance for all providers
 - `p` cycles the Parakeet live preset in tuned mode
+
+Parakeet live output now also includes a derived confidence summary on partial
+and final transcripts plus a `speech/no transcript` status when speech was
+detected but the worker finalized empty. This is intended as a debugging signal,
+not a calibrated probability.
 
 ## Voxtral EOU
 
