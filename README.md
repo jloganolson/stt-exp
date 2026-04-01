@@ -204,6 +204,19 @@ Example with more aggressive Parakeet finalization for short utterances:
   --parakeet-preroll-ms 120
 ```
 
+Example with a slower, safer Parakeet preset when live speech is getting cut
+off too early:
+
+```bash
+./scripts/run_live_external_models.sh \
+  --providers deepgram parakeet \
+  --parakeet-preset accurate
+```
+
+Available tuned presets currently range from `hair` and `fast` on the
+aggressive/low-latency end up through `balanced`, `accurate`, and
+`very-accurate` on the safer end.
+
 Compare Deepgram against the multitalker Parakeet checkpoint on GPU:
 
 ```bash

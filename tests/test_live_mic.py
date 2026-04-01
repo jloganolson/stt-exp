@@ -100,6 +100,23 @@ def test_cycle_and_apply_parakeet_live_preset() -> None:
     assert updated.parakeet_eou_silence_ms == 100
     assert updated.parakeet_min_utterance_ms == 30
     assert updated.parakeet_force_finalize_ms == 160
+    assert cycle_parakeet_live_preset_name("hair") == "accurate"
+
+    accurate = apply_parakeet_live_preset(config, "accurate")
+    assert accurate.parakeet_preset == "accurate"
+    assert accurate.parakeet_eou_silence_ms == 320
+    assert accurate.parakeet_min_utterance_ms == 70
+    assert accurate.parakeet_force_finalize_ms == 550
+    assert accurate.parakeet_preroll_ms == 220
+    assert accurate.parakeet_rms_threshold == 0.007
+
+    very_accurate = apply_parakeet_live_preset(config, "very-accurate")
+    assert very_accurate.parakeet_preset == "very-accurate"
+    assert very_accurate.parakeet_eou_silence_ms == 420
+    assert very_accurate.parakeet_min_utterance_ms == 80
+    assert very_accurate.parakeet_force_finalize_ms == 750
+    assert very_accurate.parakeet_preroll_ms == 280
+    assert very_accurate.parakeet_rms_threshold == 0.006
 
 
 def test_run_live_command_applies_parakeet_preset(monkeypatch) -> None:

@@ -80,6 +80,22 @@ PARAKEET_LIVE_PRESETS = (
         preroll_ms=80,
         rms_threshold=0.006,
     ),
+    ParakeetLivePreset(
+        name="accurate",
+        eou_silence_ms=320,
+        min_utterance_ms=70,
+        force_finalize_ms=550,
+        preroll_ms=220,
+        rms_threshold=0.007,
+    ),
+    ParakeetLivePreset(
+        name="very-accurate",
+        eou_silence_ms=420,
+        min_utterance_ms=80,
+        force_finalize_ms=750,
+        preroll_ms=280,
+        rms_threshold=0.006,
+    ),
 )
 
 PARAKEET_LIVE_PRESET_NAMES = tuple(preset.name for preset in PARAKEET_LIVE_PRESETS)
