@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PARAKEET_PYTHON="${PARAKEET_PYTHON:-/home/logan/Projects/parakeet-exp/.venv/bin/python}"
 PARAKEET_DEVICE="${PARAKEET_DEVICE:-auto}"
+PARAKEET_MODEL_ID="${PARAKEET_MODEL_ID:-}"
+PARAKEET_ATT_CONTEXT_SIZE="${PARAKEET_ATT_CONTEXT_SIZE:-}"
 SHERPA_MODEL_DIR="${SHERPA_MODEL_DIR:-/home/logan/Projects/sherpa-exp/sherpa-onnx-nemotron-speech-streaming-en-0.6b-int8-2026-01-14}"
 VOXTRAL_URI="${VOXTRAL_URI:-ws://127.0.0.1:8000/v1/realtime}"
 VOXTRAL_AUTOSTART="${VOXTRAL_AUTOSTART:-1}"
@@ -18,6 +20,19 @@ ARGS=(
   --voxtral-uri "${VOXTRAL_URI}"
   "$@"
 )
+
+if [[ -n "${PARAKEET_MODEL_ID}" ]]; then
+  ARGS+=(--parakeet-model-id "${PARAKEET_MODEL_ID}")
+fi
+
+if [[ -n "${PARAKEET_ATT_CONTEXT_SIZE}" ]]; then
+  read -r -a PARAKEET_ATT_CONTEXT_SIZE_PARTS <<< "${PARAKEET_ATT_CONTEXT_SIZE}"
+  if [[ "${#PARAKEET_ATT_CONTEXT_SIZE_PARTS[@]}" -ne 2 ]]; then
+    printf 'PARAKEET_ATT_CONTEXT_SIZE must contain exactly two integers, got: %s\n' "${PARAKEET_ATT_CONTEXT_SIZE}" >&2
+    exit 1
+  fi
+  ARGS+=(--parakeet-att-context-size "${PARAKEET_ATT_CONTEXT_SIZE_PARTS[0]}" "${PARAKEET_ATT_CONTEXT_SIZE_PARTS[1]}")
+fi
 
 VOXTRAL_PID=""
 VOXTRAL_LOG=""

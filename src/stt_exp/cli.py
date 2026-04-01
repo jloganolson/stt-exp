@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 
 from stt_exp.audio import load_audio
 from stt_exp.live_mic import (
+    PARAKEET_LIVE_MODE_CHOICES,
     PARAKEET_LIVE_PRESET_NAMES,
     LiveConfig,
     apply_parakeet_live_preset,
@@ -38,6 +39,8 @@ DEFAULT_SHERPA_MODEL_DIR = os.environ.get(
 )
 DEFAULT_PARAKEET_BENCH_WORKER = str(REPO_ROOT / "scripts" / "parakeet_worker.py")
 DEFAULT_PARAKEET_LIVE_WORKER = str(REPO_ROOT / "scripts" / "parakeet_live_worker.py")
+DEFAULT_PARAKEET_MODEL_ID = "nvidia/parakeet_realtime_eou_120m-v1"
+DEFAULT_MULTITALKER_PARAKEET_MODEL_ID = "nvidia/multitalker-parakeet-streaming-0.6b-v1"
 
 
 def _default_parakeet_python() -> str:
@@ -105,8 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--parakeet-model-id",
         type=str,
-        default="nvidia/parakeet_realtime_eou_120m-v1",
+        default=DEFAULT_PARAKEET_MODEL_ID,
     )
+    bench.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="cuda")
+    bench.add_argument("--parakeet-att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
     bench.add_argument("--parakeet-silence-chunks", type=int, default=2)
     bench.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     bench.add_argument(
@@ -172,9 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument(
         "--parakeet-model-id",
         type=str,
-        default="nvidia/parakeet_realtime_eou_120m-v1",
+        default=DEFAULT_PARAKEET_MODEL_ID,
     )
     live.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="auto")
+    live.add_argument("--parakeet-att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
+    live.add_argument("--parakeet-live-mode", choices=PARAKEET_LIVE_MODE_CHOICES, default="tuned")
     live.add_argument("--parakeet-preset", choices=PARAKEET_LIVE_PRESET_NAMES, default="balanced")
     live.add_argument("--parakeet-eou-silence-ms", type=int, default=None)
     live.add_argument("--parakeet-min-utterance-ms", type=int, default=None)
@@ -290,6 +297,7 @@ def run_live_command(args: argparse.Namespace) -> None:
             parakeet_worker_script=args.parakeet_worker_script,
             parakeet_model_id=args.parakeet_model_id,
             parakeet_device=args.parakeet_device,
+            parakeet_live_mode=args.parakeet_live_mode,
             parakeet_preset=args.parakeet_preset,
             parakeet_eou_silence_ms=args.parakeet_eou_silence_ms,
             parakeet_min_utterance_ms=args.parakeet_min_utterance_ms,
@@ -304,6 +312,11 @@ def run_live_command(args: argparse.Namespace) -> None:
             voxtral_eou_silero_min_silence_ms=args.voxtral_eou_silero_min_silence_ms,
             voxtral_eou_smart_turn_model_path=args.voxtral_eou_smart_turn_model_path,
             voxtral_eou_smart_turn_cpu_count=args.voxtral_eou_smart_turn_cpu_count,
+            parakeet_att_context_size=(
+                tuple(getattr(args, "parakeet_att_context_size"))
+                if getattr(args, "parakeet_att_context_size", None) is not None
+                else None
+            ),
         ),
         args.parakeet_preset,
     )
@@ -410,8 +423,14 @@ def _build_providers(args: argparse.Namespace):
                         python_executable=args.parakeet_python,
                         worker_script=args.parakeet_worker_script,
                         model_id=args.parakeet_model_id,
+                        device=args.parakeet_device,
                         pace=args.pace,
                         silence_chunks=args.parakeet_silence_chunks,
+                        att_context_size=(
+                            tuple(args.parakeet_att_context_size)
+                            if args.parakeet_att_context_size is not None
+                            else None
+                        ),
                     )
                 )
             )

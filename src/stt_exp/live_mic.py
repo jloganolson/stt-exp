@@ -34,6 +34,7 @@ load_dotenv()
 
 SAMPLE_RATE = 16_000
 PARAKEET_CONTROL_CYCLE_PRESET = "parakeet.preset.cycle"
+PARAKEET_LIVE_MODE_CHOICES = ("legacy", "tuned")
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,7 @@ class LiveConfig:
     parakeet_worker_script: str
     parakeet_model_id: str
     parakeet_device: str
+    parakeet_live_mode: str
     parakeet_preset: str
     parakeet_eou_silence_ms: int
     parakeet_min_utterance_ms: int
@@ -113,6 +115,7 @@ class LiveConfig:
     voxtral_eou_silero_min_silence_ms: int
     voxtral_eou_smart_turn_model_path: str | None
     voxtral_eou_smart_turn_cpu_count: int
+    parakeet_att_context_size: tuple[int, int] | None = None
 
 
 @dataclass(slots=True)
@@ -305,6 +308,8 @@ def apply_parakeet_live_preset(config: LiveConfig, preset_name: str) -> LiveConf
 
 
 def summarize_parakeet_live_config(config: LiveConfig) -> str:
+    if config.parakeet_live_mode == "legacy":
+        return "legacy model-eou-only"
     return (
         f"{config.parakeet_preset} silence={config.parakeet_eou_silence_ms}ms "
         f"min={config.parakeet_min_utterance_ms}ms force={config.parakeet_force_finalize_ms}ms "
@@ -398,7 +403,10 @@ def run_live(config: LiveConfig) -> None:
             f"Voxtral EOU: {summarize_voxtral_eou_config(_build_voxtral_live_eou_config(config))}"
         )
     if "parakeet" in config.providers:
-        print("[system] Parakeet hotkeys: p cycles live preset.", flush=True)
+        if config.parakeet_live_mode == "legacy":
+            print("[system] Parakeet live mode: legacy.", flush=True)
+        else:
+            print("[system] Parakeet hotkeys: p cycles live preset.", flush=True)
         if "voxtral" not in config.providers:
             display.set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(config)}")
     display.init()
@@ -447,7 +455,11 @@ def run_live(config: LiveConfig) -> None:
                             except queue.Full:
                                 pass
                             continue
-                        if "parakeet" in config.providers and key.lower() == "p":
+                        if (
+                            "parakeet" in config.providers
+                            and config.parakeet_live_mode != "legacy"
+                            and key.lower() == "p"
+                        ):
                             try:
                                 control_queues["parakeet"].put_nowait(PARAKEET_CONTROL_CYCLE_PRESET)
                             except queue.Full:
@@ -850,6 +862,8 @@ def _run_parakeet_live(
         active_config.parakeet_model_id,
         "--device",
         active_config.parakeet_device,
+        "--live-mode",
+        active_config.parakeet_live_mode,
         "--preset",
         active_config.parakeet_preset,
         "--eou-silence-ms",
@@ -863,6 +877,14 @@ def _run_parakeet_live(
         "--rms-threshold",
         str(active_config.parakeet_rms_threshold),
     ]
+    if active_config.parakeet_att_context_size is not None:
+        cmd.extend(
+            [
+                "--att-context-size",
+                str(active_config.parakeet_att_context_size[0]),
+                str(active_config.parakeet_att_context_size[1]),
+            ]
+        )
 
     try:
         proc = subprocess.Popen(
@@ -912,6 +934,16 @@ def _run_parakeet_live(
     reader = threading.Thread(target=read_worker_output, daemon=True)
     reader.start()
 
+    def send_worker_message(payload: dict[str, object]) -> bool:
+        if proc.stdin is None:
+            return False
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+            return True
+        except (BrokenPipeError, ValueError):
+            return False
+
     try:
         assert proc.stdin is not None
         while not stop_event.is_set():
@@ -924,29 +956,38 @@ def _run_parakeet_live(
             except queue.Empty:
                 action = None
             if action == "reset":
-                proc.stdin.write(json.dumps({"type": "reset"}) + "\n")
-                proc.stdin.flush()
+                if not send_worker_message({"type": "reset"}):
+                    if stop_event.is_set() or proc.poll() is not None:
+                        break
+                    emit("parakeet", "error: failed to send reset to worker", kind="status")
+                    stop_event.set()
+                    break
                 continue
             if action == PARAKEET_CONTROL_CYCLE_PRESET:
+                if active_config.parakeet_live_mode == "legacy":
+                    emit("parakeet", "legacy mode: presets disabled", kind="status")
+                    continue
                 active_config = apply_parakeet_live_preset(
                     active_config,
                     cycle_parakeet_live_preset_name(active_config.parakeet_preset),
                 )
-                proc.stdin.write(
-                    json.dumps(
-                        {
-                            "type": "set_config",
-                            "preset": active_config.parakeet_preset,
-                            "eou_silence_ms": active_config.parakeet_eou_silence_ms,
-                            "min_utterance_ms": active_config.parakeet_min_utterance_ms,
-                            "force_finalize_ms": active_config.parakeet_force_finalize_ms,
-                            "preroll_ms": active_config.parakeet_preroll_ms,
-                            "rms_threshold": active_config.parakeet_rms_threshold,
-                        }
-                    )
-                    + "\n"
-                )
-                proc.stdin.flush()
+                if not send_worker_message(
+                    {
+                        "type": "set_config",
+                        "live_mode": active_config.parakeet_live_mode,
+                        "preset": active_config.parakeet_preset,
+                        "eou_silence_ms": active_config.parakeet_eou_silence_ms,
+                        "min_utterance_ms": active_config.parakeet_min_utterance_ms,
+                        "force_finalize_ms": active_config.parakeet_force_finalize_ms,
+                        "preroll_ms": active_config.parakeet_preroll_ms,
+                        "rms_threshold": active_config.parakeet_rms_threshold,
+                    }
+                ):
+                    if stop_event.is_set() or proc.poll() is not None:
+                        break
+                    emit("parakeet", "error: failed to update worker preset", kind="status")
+                    stop_event.set()
+                    break
                 set_system_status(f"Parakeet preset: {summarize_parakeet_live_config(active_config)}")
                 emit("parakeet", f"preset -> {summarize_parakeet_live_config(active_config)}", kind="status")
                 continue
@@ -958,16 +999,19 @@ def _run_parakeet_live(
                 "type": "audio",
                 "audio": base64.b64encode(chunk).decode("utf-8"),
             }
-            proc.stdin.write(json.dumps(payload) + "\n")
-            proc.stdin.flush()
+            if not send_worker_message(payload):
+                if stop_event.is_set() or proc.poll() is not None:
+                    break
+                emit("parakeet", "error: failed to stream audio to worker", kind="status")
+                stop_event.set()
+                break
     except Exception as exc:
         emit("parakeet", f"error: {exc}", kind="status")
         stop_event.set()
     finally:
         try:
             if proc.stdin is not None:
-                proc.stdin.write(json.dumps({"type": "stop"}) + "\n")
-                proc.stdin.flush()
+                send_worker_message({"type": "stop"})
                 proc.stdin.close()
         except Exception:
             pass

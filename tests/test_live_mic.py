@@ -74,6 +74,7 @@ def test_cycle_and_apply_parakeet_live_preset() -> None:
         parakeet_worker_script="/tmp/worker.py",
         parakeet_model_id="fake-model",
         parakeet_device="cuda",
+        parakeet_live_mode="tuned",
         parakeet_preset="balanced",
         parakeet_eou_silence_ms=240,
         parakeet_min_utterance_ms=60,
@@ -88,6 +89,7 @@ def test_cycle_and_apply_parakeet_live_preset() -> None:
         voxtral_eou_silero_min_silence_ms=500,
         voxtral_eou_smart_turn_model_path=None,
         voxtral_eou_smart_turn_cpu_count=1,
+        parakeet_att_context_size=(70, 1),
     )
 
     assert cycle_parakeet_live_preset_name("balanced") == "fast"
@@ -123,6 +125,7 @@ def test_run_live_command_applies_parakeet_preset(monkeypatch) -> None:
             parakeet_worker_script="/tmp/worker.py",
             parakeet_model_id="fake-model",
             parakeet_device="cuda",
+            parakeet_live_mode="tuned",
             parakeet_preset="fast",
             parakeet_eou_silence_ms=None,
             parakeet_min_utterance_ms=None,
@@ -142,6 +145,7 @@ def test_run_live_command_applies_parakeet_preset(monkeypatch) -> None:
 
     config = captured["config"]
     assert config.parakeet_preset == "fast"
+    assert config.parakeet_live_mode == "tuned"
     assert config.parakeet_eou_silence_ms == 180
     assert config.parakeet_min_utterance_ms == 50
     assert config.parakeet_force_finalize_ms == 300
@@ -254,6 +258,7 @@ def test_deepgram_and_parakeet_live_can_run_together(tmp_path, monkeypatch) -> N
         parakeet_worker_script=str(worker_script),
         parakeet_model_id="fake-model",
         parakeet_device="cpu",
+        parakeet_live_mode="tuned",
         parakeet_preset="balanced",
         parakeet_eou_silence_ms=240,
         parakeet_min_utterance_ms=60,
@@ -268,6 +273,7 @@ def test_deepgram_and_parakeet_live_can_run_together(tmp_path, monkeypatch) -> N
         voxtral_eou_silero_min_silence_ms=500,
         voxtral_eou_smart_turn_model_path=None,
         voxtral_eou_smart_turn_cpu_count=1,
+        parakeet_att_context_size=(70, 1),
     )
 
     stop_event = threading.Event()
@@ -367,6 +373,7 @@ def test_run_parakeet_live_passes_tuning_flags(monkeypatch) -> None:
         parakeet_worker_script="/tmp/parakeet-worker.py",
         parakeet_model_id="fake-model",
         parakeet_device="cuda",
+        parakeet_live_mode="tuned",
         parakeet_preset="balanced",
         parakeet_eou_silence_ms=180,
         parakeet_min_utterance_ms=50,
@@ -381,6 +388,7 @@ def test_run_parakeet_live_passes_tuning_flags(monkeypatch) -> None:
         voxtral_eou_silero_min_silence_ms=500,
         voxtral_eou_smart_turn_model_path=None,
         voxtral_eou_smart_turn_cpu_count=1,
+        parakeet_att_context_size=(70, 1),
     )
     control_queue: queue.Queue[str] = queue.Queue()
     control_queue.put(PARAKEET_CONTROL_CYCLE_PRESET)
@@ -402,6 +410,8 @@ def test_run_parakeet_live_passes_tuning_flags(monkeypatch) -> None:
         "fake-model",
         "--device",
         "cuda",
+        "--live-mode",
+        "tuned",
         "--preset",
         "balanced",
         "--eou-silence-ms",
@@ -414,5 +424,53 @@ def test_run_parakeet_live_passes_tuning_flags(monkeypatch) -> None:
         "120",
         "--rms-threshold",
         "0.02",
+        "--att-context-size",
+        "70",
+        "1",
     ]
     assert any('"preset": "fast"' in item for item in captured["writes"])
+
+
+def test_run_live_command_supports_parakeet_legacy_mode(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run_live(config: LiveConfig) -> None:
+        captured["config"] = config
+
+    monkeypatch.setattr("stt_exp.cli.run_live", fake_run_live)
+
+    run_live_command(
+        Namespace(
+            providers=["parakeet"],
+            chunk_ms=40,
+            device=None,
+            deepgram_model="nova-3",
+            deepgram_endpointing_ms=300,
+            deepgram_utterance_end_ms=1000,
+            sherpa_model_dir="",
+            sherpa_provider="cuda",
+            sherpa_num_threads=2,
+            parakeet_python="/tmp/python",
+            parakeet_worker_script="/tmp/worker.py",
+            parakeet_model_id="fake-model",
+            parakeet_device="cuda",
+            parakeet_live_mode="legacy",
+            parakeet_preset="balanced",
+            parakeet_eou_silence_ms=None,
+            parakeet_min_utterance_ms=None,
+            parakeet_force_finalize_ms=None,
+            parakeet_preroll_ms=None,
+            parakeet_rms_threshold=None,
+            voxtral_uri="ws://127.0.0.1:8000/v1/realtime",
+            voxtral_model="voxtral",
+            voxtral_eou_mode="none",
+            voxtral_eou_min_utterance_ms=300,
+            voxtral_eou_silero_threshold=0.5,
+            voxtral_eou_silero_min_silence_ms=500,
+            voxtral_eou_smart_turn_model_path=None,
+            voxtral_eou_smart_turn_cpu_count=1,
+        )
+    )
+
+    config = captured["config"]
+    assert config.parakeet_live_mode == "legacy"

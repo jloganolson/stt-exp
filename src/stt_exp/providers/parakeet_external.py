@@ -15,6 +15,8 @@ class ParakeetExternalConfig:
     model_id: str
     pace: str
     silence_chunks: int
+    device: str = "cuda"
+    att_context_size: tuple[int, int] | None = None
 
 
 class ParakeetExternalProvider(RealtimeProvider):
@@ -31,11 +33,21 @@ class ParakeetExternalProvider(RealtimeProvider):
             str(Path(audio_clip.path).resolve()),
             "--model-id",
             self.config.model_id,
+            "--device",
+            self.config.device,
             "--pace",
             self.config.pace,
             "--silence-chunks",
             str(self.config.silence_chunks),
         ]
+        if self.config.att_context_size is not None:
+            cmd.extend(
+                [
+                    "--att-context-size",
+                    str(self.config.att_context_size[0]),
+                    str(self.config.att_context_size[1]),
+                ]
+            )
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
         marker = "PARAKEET_RESULT_JSON="

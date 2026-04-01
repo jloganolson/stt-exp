@@ -22,8 +22,6 @@ import nemo.collections.asr as nemo_asr
 from nemo.collections.asr.parts.submodules.rnnt_greedy_decoding import label_collate
 
 MARKER = "PARAKEET_LIVE_EVENT_JSON="
-EOU_TOKEN_ID = 1024
-EOB_TOKEN_ID = 1025
 SAMPLE_RATE = 16_000
 
 
@@ -31,6 +29,8 @@ SAMPLE_RATE = 16_000
 class LiveParakeetConfig:
     model_id: str
     device: str
+    att_context_size: tuple[int, int] | None
+    live_mode: str
     preset: str
     eou_silence_ms: int
     min_utterance_ms: int
@@ -43,13 +43,35 @@ def emit(message: dict[str, object]) -> None:
     print(f"{MARKER}{json.dumps(message)}", flush=True)
 
 
+def _resolve_model_eou_token_ids(model_id: str, tokenizer_size: int) -> tuple[int, int] | None:
+    # The older realtime EOU checkpoints append two explicit EOU/EOB tokens
+    # immediately before the RNNT blank token. Other checkpoints, including the
+    # multitalker streaming model, do not use that layout.
+    if "realtime_eou" not in model_id.lower():
+        return None
+    if tokenizer_size < 2:
+        return None
+    return (tokenizer_size - 2, tokenizer_size - 1)
+
+
 def _format_status(config: LiveParakeetConfig, *, step_ms: int, device_type: str) -> str:
+    att_context = "default" if config.att_context_size is None else list(config.att_context_size)
     return (
         f"connected model={config.model_id} step_ms={step_ms} device={device_type} "
+        f"att_context={att_context} "
+        f"live_mode={config.live_mode} "
         f"preset={config.preset} eou_silence_ms={config.eou_silence_ms} "
         f"min_utterance_ms={config.min_utterance_ms} force_finalize_ms={config.force_finalize_ms} "
         f"preroll_ms={config.preroll_ms} rms_threshold={config.rms_threshold}"
     )
+
+
+def _set_att_context_size(model, att_context_size: tuple[int, int] | None) -> None:
+    if att_context_size is None:
+        return
+    if not hasattr(model.encoder, "set_default_att_context_size"):
+        raise RuntimeError("model does not support --att-context-size")
+    model.encoder.set_default_att_context_size(att_context_size=list(att_context_size))
 
 
 class ParakeetLiveStreamer:
@@ -64,8 +86,13 @@ class ParakeetLiveStreamer:
         self.device = torch.device(resolved_device)
         map_location = "cpu" if self.device.type == "cpu" else None
         self.model = nemo_asr.models.ASRModel.from_pretrained(config.model_id, map_location=map_location)
+        _set_att_context_size(self.model, config.att_context_size)
         self.model = self.model.to(self.device)
         self.model.eval()
+        self.model_eou_token_ids = _resolve_model_eou_token_ids(
+            config.model_id,
+            len(self.model.tokenizer.tokenizer),
+        )
 
         self.greedy = self.model.decoding.decoding
         scfg = self.model.encoder.streaming_cfg
@@ -205,7 +232,7 @@ class ParakeetLiveStreamer:
                     )
                     self.prev_text = current_text
 
-                if any(token_id in (EOU_TOKEN_ID, EOB_TOKEN_ID) for token_id in new_tokens):
+                if self.model_eou_token_ids and any(token_id in self.model_eou_token_ids for token_id in new_tokens):
                     self.last_audio_pos_s = round(actual_end * 0.01, 3)
                     self._emit_final_and_reset(current_text, reason="model_eou")
                     return True
@@ -267,6 +294,12 @@ class ParakeetLiveStreamer:
         if chunk.size == 0:
             return
 
+        if self.config.live_mode == "legacy":
+            self.audio_buffer = np.concatenate([self.audio_buffer, chunk])
+            self.last_audio_pos_s = round(self.audio_buffer.shape[0] / SAMPLE_RATE, 3)
+            self._decode_buffer(allow_partial_tail=False)
+            return
+
         now = time.monotonic()
         rms = float(np.sqrt(np.mean(np.square(chunk), dtype=np.float32)))
         is_speech = rms >= self.config.rms_threshold
@@ -296,6 +329,12 @@ class ParakeetLiveStreamer:
         self._maybe_finalize_on_fallback()
 
     def flush(self) -> None:
+        if self.config.live_mode == "legacy":
+            final_text = self._current_text()
+            if final_text:
+                emit({"type": "final", "text": final_text, "reason": "stop"})
+            self._reset_stream_state()
+            return
         if self.utterance_started_at is None:
             self._reset_stream_state()
             return
@@ -313,6 +352,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-id", default="nvidia/parakeet_realtime_eou_120m-v1")
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    parser.add_argument("--att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
+    parser.add_argument("--live-mode", choices=["legacy", "tuned"], default="tuned")
     parser.add_argument("--preset", default="balanced")
     parser.add_argument("--eou-silence-ms", type=int, default=240)
     parser.add_argument("--min-utterance-ms", type=int, default=60)
@@ -326,6 +367,8 @@ def main() -> None:
             LiveParakeetConfig(
                 model_id=args.model_id,
                 device=args.device,
+                att_context_size=tuple(args.att_context_size) if args.att_context_size is not None else None,
+                live_mode=args.live_mode,
                 preset=args.preset,
                 eou_silence_ms=args.eou_silence_ms,
                 min_utterance_ms=args.min_utterance_ms,
@@ -370,6 +413,8 @@ def main() -> None:
                 next_config = LiveParakeetConfig(
                     model_id=streamer.config.model_id,
                     device=streamer.config.device,
+                    att_context_size=streamer.config.att_context_size,
+                    live_mode=str(message.get("live_mode", streamer.config.live_mode)),
                     preset=str(message.get("preset", streamer.config.preset)),
                     eou_silence_ms=int(message.get("eou_silence_ms", streamer.config.eou_silence_ms)),
                     min_utterance_ms=int(message.get("min_utterance_ms", streamer.config.min_utterance_ms)),

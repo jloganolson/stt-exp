@@ -19,18 +19,38 @@ import nemo.collections.asr as nemo_asr
 from nemo.collections.asr.parts.submodules.rnnt_greedy_decoding import label_collate
 
 
+def _resolve_device(requested_device: str) -> torch.device:
+    if requested_device == "auto":
+        requested_device = "cuda" if torch.cuda.is_available() else "cpu"
+    if requested_device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("cuda requested but CUDA is not available")
+    return torch.device(requested_device)
+
+
+def _set_att_context_size(model, att_context_size: tuple[int, int] | None) -> None:
+    if att_context_size is None:
+        return
+    if not hasattr(model.encoder, "set_default_att_context_size"):
+        raise RuntimeError("model does not support --att-context-size")
+    model.encoder.set_default_att_context_size(att_context_size=list(att_context_size))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio", required=True)
     parser.add_argument("--model-id", default="nvidia/parakeet_realtime_eou_120m-v1")
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="cuda")
     parser.add_argument("--pace", choices=["realtime", "burst"], default="realtime")
     parser.add_argument("--silence-chunks", type=int, default=5)
+    parser.add_argument("--att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
     args = parser.parse_args()
 
-    device = torch.device("cuda")
+    device = _resolve_device(args.device)
+    map_location = "cpu" if device.type == "cpu" else None
     t_load = time.perf_counter()
-    model = nemo_asr.models.ASRModel.from_pretrained(args.model_id)
-    model = model.cuda()
+    model = nemo_asr.models.ASRModel.from_pretrained(args.model_id, map_location=map_location)
+    _set_att_context_size(model, tuple(args.att_context_size) if args.att_context_size is not None else None)
+    model = model.to(device)
     model.eval()
     load_time_s = time.perf_counter() - t_load
 
@@ -72,7 +92,8 @@ def main() -> None:
             cache_last_time=wt,
             cache_last_channel_len=wcl,
         )
-    torch.cuda.synchronize()
+    if device.type == "cuda":
+        torch.cuda.synchronize()
 
     cache_ch, cache_t, cache_ch_len = model.encoder.get_initial_cache_state(batch_size=1, device=device)
     last_token = None
@@ -187,6 +208,8 @@ def main() -> None:
         "events": events,
         "meta": {
             "model_id": args.model_id,
+            "device": device.type,
+            "att_context_size": list(args.att_context_size) if args.att_context_size is not None else None,
             "load_time_s": load_time_s,
             "native_step_ms": step_ms,
             "pace": args.pace,

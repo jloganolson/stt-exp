@@ -136,8 +136,25 @@ Optional:
 export PARAKEET_DEVICE=auto
 ```
 
+For the multitalker checkpoint, keep using the same worker but point it at the
+new model and choose a streaming attention context explicitly. NVIDIA documents
+these attention contexts in 80 ms units, so `70 1` is 160 ms chunks and
+`70 13` is 1.12 s chunks.
+
+```bash
+export PARAKEET_MODEL_ID=nvidia/multitalker-parakeet-streaming-0.6b-v1
+export PARAKEET_ATT_CONTEXT_SIZE="70 1"
+export PARAKEET_DEVICE=cuda
+```
+
+This repo uses the checkpoint without diarization masks, which makes NeMo fall
+back to the model's documented single-speaker mode. That is the practical mode
+for comparing it against `deepgram` on the same mic input or on the same WAVs.
+
 Live tuning flags for Parakeet:
 
+- `--parakeet-live-mode` (`legacy` or `tuned`)
+- `--parakeet-att-context-size LEFT RIGHT`
 - `--parakeet-preset`
 - `--parakeet-eou-silence-ms`
 - `--parakeet-min-utterance-ms`
@@ -187,10 +204,28 @@ Example with more aggressive Parakeet finalization for short utterances:
   --parakeet-preroll-ms 120
 ```
 
+Compare Deepgram against the multitalker Parakeet checkpoint on GPU:
+
+```bash
+PARAKEET_MODEL_ID=nvidia/multitalker-parakeet-streaming-0.6b-v1 \
+PARAKEET_ATT_CONTEXT_SIZE="70 1" \
+PARAKEET_DEVICE=cuda \
+./scripts/run_live_external_models.sh \
+  --providers deepgram parakeet
+```
+
+Run Parakeet with the old live behavior:
+
+```bash
+uv run stt-exp live \
+  --providers deepgram parakeet \
+  --parakeet-live-mode legacy
+```
+
 Live hotkeys when Parakeet is active:
 
 - `r` clears the current utterance for all providers
-- `p` cycles the Parakeet live preset
+- `p` cycles the Parakeet live preset in tuned mode
 
 ## Voxtral EOU
 
@@ -276,6 +311,18 @@ uv run stt-exp benchmark \
   --chunk-ms 40 \
   --pace realtime \
   --repeats 1
+```
+
+Compare Deepgram against the multitalker Parakeet checkpoint with GPU
+acceleration:
+
+```bash
+uv run stt-exp benchmark \
+  --manifest data/test-wavs.csv \
+  --providers deepgram parakeet \
+  --parakeet-model-id nvidia/multitalker-parakeet-streaming-0.6b-v1 \
+  --parakeet-device cuda \
+  --parakeet-att-context-size 70 1
 ```
 
 ## Notes
