@@ -150,12 +150,19 @@ class ParakeetLiveStreamer:
         return self.model.tokenizer.ids_to_text(self.all_tokens).strip()
 
     def _confidence_summary(self) -> dict[str, float | str] | None:
-        if not self.token_confidences:
+        return self._summarize_confidences(self.token_confidences, self.token_margins)
+
+    @staticmethod
+    def _summarize_confidences(
+        token_confidences: list[float],
+        token_margins: list[float],
+    ) -> dict[str, float | str] | None:
+        if not token_confidences:
             return None
-        avg_conf = float(sum(self.token_confidences) / len(self.token_confidences))
-        min_conf = float(min(self.token_confidences))
-        last_conf = float(self.token_confidences[-1])
-        avg_margin = float(sum(self.token_margins) / len(self.token_margins)) if self.token_margins else 0.0
+        avg_conf = float(sum(token_confidences) / len(token_confidences))
+        min_conf = float(min(token_confidences))
+        last_conf = float(token_confidences[-1])
+        avg_margin = float(sum(token_margins) / len(token_margins)) if token_margins else 0.0
         if avg_conf >= 0.85 and min_conf >= 0.55:
             label = "high"
         elif avg_conf >= 0.65 and min_conf >= 0.35:
@@ -168,8 +175,99 @@ class ParakeetLiveStreamer:
             "min": round(min_conf, 3),
             "last": round(last_conf, 3),
             "avg_margin": round(avg_margin, 3),
-            "tokens": len(self.token_confidences),
+            "tokens": len(token_confidences),
         }
+
+    def _decode_full_utterance(
+        self,
+        waveform_np: np.ndarray,
+        *,
+        tail_silence_chunks: int,
+    ) -> tuple[str, dict[str, float | str] | None]:
+        samples_per_chunk = self.step_size * (SAMPLE_RATE // 100)
+        if tail_silence_chunks > 0:
+            waveform_np = np.concatenate(
+                [
+                    waveform_np,
+                    np.zeros((samples_per_chunk * tail_silence_chunks,), dtype=np.float32),
+                ]
+            )
+
+        cache_ch, cache_t, cache_ch_len = self.model.encoder.get_initial_cache_state(
+            batch_size=1,
+            device=self.device,
+        )
+        last_token = None
+        dec_state = None
+        all_tokens: list[int] = []
+        token_confidences: list[float] = []
+        token_margins: list[float] = []
+        pre_encode_cache = None
+
+        with torch.no_grad():
+            waveform = torch.from_numpy(waveform_np).unsqueeze(0).to(self.device)
+            length = torch.tensor([waveform_np.shape[0]], dtype=torch.long, device=self.device)
+            mel, _ = self.model.preprocessor(input_signal=waveform, length=length)
+            mel_pos = 0
+
+            while mel_pos < mel.shape[2]:
+                end_pos = min(mel_pos + self.step_size, mel.shape[2])
+                new_frames = mel[:, :, mel_pos:end_pos]
+                if new_frames.shape[2] < self.step_size:
+                    pad = torch.zeros(
+                        (1, mel.shape[1], self.step_size - new_frames.shape[2]),
+                        device=self.device,
+                    )
+                    new_frames = torch.cat([new_frames, pad], dim=2)
+
+                if pre_encode_cache is None:
+                    chunk_input = new_frames
+                else:
+                    chunk_input = torch.cat([pre_encode_cache, new_frames], dim=2)
+                pre_encode_cache = new_frames[:, :, -self.pre_enc_cache_size :]
+                chunk_len = torch.tensor([chunk_input.shape[2]], dtype=torch.long, device=self.device)
+
+                enc_out, _enc_len, cache_ch, cache_t, cache_ch_len = self.model.encoder(
+                    audio_signal=chunk_input,
+                    length=chunk_len,
+                    cache_last_channel=cache_ch,
+                    cache_last_time=cache_t,
+                    cache_last_channel_len=cache_ch_len,
+                )
+
+                enc_frames = enc_out.permute(2, 0, 1)
+                for idx in range(enc_frames.shape[0]):
+                    frame = enc_frames[idx : idx + 1]
+                    not_blank = True
+                    symbols_added = 0
+                    while not_blank and symbols_added < 10:
+                        if last_token is None and dec_state is None:
+                            last_label = self.greedy._SOS
+                        else:
+                            last_label = label_collate([[last_token]])
+                        g, hidden_prime = self.greedy._pred_step(last_label, dec_state)
+                        logp = self.greedy._joint_step(frame, g, log_normalize=None)[0, 0, 0, :]
+                        if logp.dtype != torch.float32:
+                            logp = logp.float()
+                        probs = torch.softmax(logp, dim=0)
+                        token_id = logp.argmax().item()
+                        if token_id == self.greedy._blank_index:
+                            not_blank = False
+                        else:
+                            top_probs = torch.topk(probs, k=min(2, probs.shape[0]))
+                            top1_prob = float(probs[token_id].item())
+                            top2_prob = float(top_probs.values[1].item()) if top_probs.values.shape[0] > 1 else 0.0
+                            all_tokens.append(token_id)
+                            token_confidences.append(top1_prob)
+                            token_margins.append(max(0.0, top1_prob - top2_prob))
+                            dec_state = hidden_prime
+                            last_token = token_id
+                            symbols_added += 1
+
+                mel_pos = end_pos
+
+        final_text = self.model.tokenizer.ids_to_text(all_tokens).strip() if all_tokens else ""
+        return final_text, self._summarize_confidences(token_confidences, token_margins)
 
     def _utterance_duration_ms(self) -> float:
         return (self.audio_buffer.shape[0] / SAMPLE_RATE) * 1000.0
@@ -281,10 +379,16 @@ class ParakeetLiveStreamer:
                 if actual_end == mel.shape[2]:
                     return False
 
-    def _emit_final_and_reset(self, text: str, *, reason: str) -> None:
+    def _emit_final_and_reset(
+        self,
+        text: str,
+        *,
+        reason: str,
+        confidence: dict[str, float | str] | None = None,
+    ) -> None:
         final_text = text.strip()
         if final_text:
-            confidence = self._confidence_summary()
+            confidence = confidence if confidence is not None else self._confidence_summary()
             emit(
                 {
                     "type": "final",
@@ -298,13 +402,18 @@ class ParakeetLiveStreamer:
 
     def _finalize_from_fallback(self, *, reason: str) -> None:
         original_audio_samples = self.audio_buffer.shape[0]
-        self._append_tail_silence(self.config.tail_silence_chunks)
-        self._decode_buffer(allow_partial_tail=True)
-        current_text = self._current_text()
+        rescored_text = ""
+        rescored_confidence = None
+        if original_audio_samples > 0:
+            rescored_text, rescored_confidence = self._decode_full_utterance(
+                self.audio_buffer.copy(),
+                tail_silence_chunks=self.config.tail_silence_chunks,
+            )
+        current_text = rescored_text or self._current_text()
         original_utterance_ms = (original_audio_samples / SAMPLE_RATE) * 1000.0
         if current_text and original_utterance_ms >= self.config.min_utterance_ms:
             self.last_audio_pos_s = round(original_audio_samples / SAMPLE_RATE, 3)
-            self._emit_final_and_reset(current_text, reason=reason)
+            self._emit_final_and_reset(current_text, reason=reason, confidence=rescored_confidence)
             return
         if self.utterance_started_at is not None and original_utterance_ms >= self.config.min_utterance_ms:
             emit(
