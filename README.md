@@ -217,8 +217,8 @@ off too early:
 Available tuned presets currently range from `hair` and `fast` on the
 aggressive/low-latency end up through `balanced`, `accurate`, and
 `very-accurate` on the safer end. The live CLI now defaults to `accurate`.
-The live worker also adds a small synthetic silence tail by default
-(`--parakeet-tail-silence-chunks 2`) before fallback finalization to help flush
+The live worker now adds a larger synthetic silence tail by default
+(`--parakeet-tail-silence-chunks 6`) before fallback finalization to help flush
 the last token or word.
 
 Compare Deepgram against the multitalker Parakeet checkpoint on GPU:

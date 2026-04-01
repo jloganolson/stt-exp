@@ -41,7 +41,7 @@ def main() -> None:
     parser.add_argument("--model-id", default="nvidia/parakeet_realtime_eou_120m-v1")
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="cuda")
     parser.add_argument("--pace", choices=["realtime", "burst"], default="realtime")
-    parser.add_argument("--silence-chunks", type=int, default=5)
+    parser.add_argument("--silence-chunks", type=int, default=6)
     parser.add_argument("--att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
     args = parser.parse_args()
 

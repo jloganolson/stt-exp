@@ -525,7 +525,7 @@ def main() -> None:
     parser.add_argument("--force-finalize-ms", type=int, default=400)
     parser.add_argument("--preroll-ms", type=int, default=160)
     parser.add_argument("--rms-threshold", type=float, default=0.008)
-    parser.add_argument("--tail-silence-chunks", type=int, default=2)
+    parser.add_argument("--tail-silence-chunks", type=int, default=6)
     args = parser.parse_args()
 
     try:

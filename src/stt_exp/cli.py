@@ -112,7 +112,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument("--parakeet-device", type=str, choices=["auto", "cuda", "cpu"], default="cuda")
     bench.add_argument("--parakeet-att-context-size", type=int, nargs=2, metavar=("LEFT", "RIGHT"), default=None)
-    bench.add_argument("--parakeet-silence-chunks", type=int, default=2)
+    bench.add_argument("--parakeet-silence-chunks", type=int, default=6)
     bench.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     bench.add_argument(
         "--voxtral-model",
@@ -188,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--parakeet-force-finalize-ms", type=int, default=None)
     live.add_argument("--parakeet-preroll-ms", type=int, default=None)
     live.add_argument("--parakeet-rms-threshold", type=float, default=None)
-    live.add_argument("--parakeet-tail-silence-chunks", type=int, default=2)
+    live.add_argument("--parakeet-tail-silence-chunks", type=int, default=6)
     live.add_argument("--voxtral-uri", type=str, default="ws://127.0.0.1:8000/v1/realtime")
     live.add_argument("--voxtral-model", type=str, default=DEFAULT_VOXTRAL_REPO)
     live.add_argument("--voxtral-eou-mode", choices=VOXTRAL_EOU_MODES, default="none")
