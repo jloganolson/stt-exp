@@ -37,6 +37,7 @@ class LiveParakeetConfig:
     force_finalize_ms: int
     preroll_ms: int
     rms_threshold: float
+    tail_silence_chunks: int
 
 
 def emit(message: dict[str, object]) -> None:
@@ -62,7 +63,8 @@ def _format_status(config: LiveParakeetConfig, *, step_ms: int, device_type: str
         f"live_mode={config.live_mode} "
         f"preset={config.preset} eou_silence_ms={config.eou_silence_ms} "
         f"min_utterance_ms={config.min_utterance_ms} force_finalize_ms={config.force_finalize_ms} "
-        f"preroll_ms={config.preroll_ms} rms_threshold={config.rms_threshold}"
+        f"preroll_ms={config.preroll_ms} rms_threshold={config.rms_threshold} "
+        f"tail_silence_chunks={config.tail_silence_chunks}"
     )
 
 
@@ -178,6 +180,13 @@ class ParakeetLiveStreamer:
         max_samples = int(SAMPLE_RATE * self.config.preroll_ms / 1000)
         self.preroll_buffer = np.concatenate([self.preroll_buffer, chunk])[-max_samples:]
 
+    def _append_tail_silence(self, silence_chunks: int) -> None:
+        if silence_chunks <= 0:
+            return
+        samples_per_chunk = self.step_size * (SAMPLE_RATE // 100)
+        silence = np.zeros((samples_per_chunk * silence_chunks,), dtype=np.float32)
+        self.audio_buffer = np.concatenate([self.audio_buffer, silence])
+
     def _run_decoder_step(self, enc_frames: torch.Tensor) -> list[int]:
         new_tokens: list[int] = []
         for idx in range(enc_frames.shape[0]):
@@ -288,18 +297,22 @@ class ParakeetLiveStreamer:
         self._reset_stream_state()
 
     def _finalize_from_fallback(self, *, reason: str) -> None:
+        original_audio_samples = self.audio_buffer.shape[0]
+        self._append_tail_silence(self.config.tail_silence_chunks)
         self._decode_buffer(allow_partial_tail=True)
         current_text = self._current_text()
-        if current_text and self._utterance_duration_ms() >= self.config.min_utterance_ms:
+        original_utterance_ms = (original_audio_samples / SAMPLE_RATE) * 1000.0
+        if current_text and original_utterance_ms >= self.config.min_utterance_ms:
+            self.last_audio_pos_s = round(original_audio_samples / SAMPLE_RATE, 3)
             self._emit_final_and_reset(current_text, reason=reason)
             return
-        if self.utterance_started_at is not None and self._utterance_duration_ms() >= self.config.min_utterance_ms:
+        if self.utterance_started_at is not None and original_utterance_ms >= self.config.min_utterance_ms:
             emit(
                 {
                     "type": "no_transcript",
                     "reason": reason,
-                    "audio_pos_s": round(self.audio_buffer.shape[0] / SAMPLE_RATE, 3),
-                    "utterance_ms": round(self._utterance_duration_ms(), 1),
+                    "audio_pos_s": round(original_audio_samples / SAMPLE_RATE, 3),
+                    "utterance_ms": round(original_utterance_ms, 1),
                 }
             )
         self._reset_stream_state()
@@ -403,6 +416,7 @@ def main() -> None:
     parser.add_argument("--force-finalize-ms", type=int, default=400)
     parser.add_argument("--preroll-ms", type=int, default=160)
     parser.add_argument("--rms-threshold", type=float, default=0.008)
+    parser.add_argument("--tail-silence-chunks", type=int, default=2)
     args = parser.parse_args()
 
     try:
@@ -418,6 +432,7 @@ def main() -> None:
                 force_finalize_ms=args.force_finalize_ms,
                 preroll_ms=args.preroll_ms,
                 rms_threshold=args.rms_threshold,
+                tail_silence_chunks=args.tail_silence_chunks,
             )
         )
     except Exception as exc:
@@ -464,6 +479,7 @@ def main() -> None:
                     force_finalize_ms=int(message.get("force_finalize_ms", streamer.config.force_finalize_ms)),
                     preroll_ms=int(message.get("preroll_ms", streamer.config.preroll_ms)),
                     rms_threshold=float(message.get("rms_threshold", streamer.config.rms_threshold)),
+                    tail_silence_chunks=int(message.get("tail_silence_chunks", streamer.config.tail_silence_chunks)),
                 )
             except (TypeError, ValueError) as exc:
                 emit({"type": "error", "message": f"invalid config update: {exc}"})

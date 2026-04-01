@@ -123,6 +123,7 @@ class LiveConfig:
     parakeet_force_finalize_ms: int
     parakeet_preroll_ms: int
     parakeet_rms_threshold: float
+    parakeet_tail_silence_chunks: int
     voxtral_uri: str
     voxtral_model: str
     voxtral_eou_mode: str
@@ -329,7 +330,8 @@ def summarize_parakeet_live_config(config: LiveConfig) -> str:
     return (
         f"{config.parakeet_preset} silence={config.parakeet_eou_silence_ms}ms "
         f"min={config.parakeet_min_utterance_ms}ms force={config.parakeet_force_finalize_ms}ms "
-        f"preroll={config.parakeet_preroll_ms}ms rms={config.parakeet_rms_threshold:.3f}"
+        f"preroll={config.parakeet_preroll_ms}ms rms={config.parakeet_rms_threshold:.3f} "
+        f"tail={config.parakeet_tail_silence_chunks}ch"
     )
 
 
@@ -913,6 +915,8 @@ def _run_parakeet_live(
         str(active_config.parakeet_preroll_ms),
         "--rms-threshold",
         str(active_config.parakeet_rms_threshold),
+        "--tail-silence-chunks",
+        str(active_config.parakeet_tail_silence_chunks),
     ]
     if active_config.parakeet_att_context_size is not None:
         cmd.extend(
@@ -1025,6 +1029,7 @@ def _run_parakeet_live(
                         "force_finalize_ms": active_config.parakeet_force_finalize_ms,
                         "preroll_ms": active_config.parakeet_preroll_ms,
                         "rms_threshold": active_config.parakeet_rms_threshold,
+                        "tail_silence_chunks": active_config.parakeet_tail_silence_chunks,
                     }
                 ):
                     if stop_event.is_set() or proc.poll() is not None:
